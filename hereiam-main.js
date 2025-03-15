@@ -4,6 +4,7 @@ const fs = require('fs');
 const { promisify } = require('util');
 const url = require('url');
 const isDev = process.env.NODE_ENV === 'development' || !app.isPackaged;
+const fileSystem = require('./src/main/fileSystem');
 
 // Convert callback-based fs methods to Promise-based
 const readFileAsync = promisify(fs.readFile);
@@ -12,6 +13,37 @@ const statAsync = promisify(fs.stat);
 
 // Window state persistence
 const windowStateFile = path.join(app.getPath('userData'), 'window-state.json');
+const indexDataFile = path.join(app.getPath('userData'), 'index-data.json');
+
+// Store indexed chunks in memory
+let indexedChunks = [];
+
+// Load indexed chunks from disk if available
+function loadIndexedChunks() {
+  try {
+    if (fs.existsSync(indexDataFile)) {
+      const data = fs.readFileSync(indexDataFile, 'utf8');
+      indexedChunks = JSON.parse(data);
+      console.log(`Loaded ${indexedChunks.length} indexed chunks from disk`);
+      return true;
+    }
+  } catch (error) {
+    console.error('Failed to load indexed chunks:', error);
+  }
+  return false;
+}
+
+// Save indexed chunks to disk
+function saveIndexedChunks() {
+  try {
+    fs.writeFileSync(indexDataFile, JSON.stringify(indexedChunks));
+    console.log(`Saved ${indexedChunks.length} indexed chunks to disk`);
+    return true;
+  } catch (error) {
+    console.error('Failed to save indexed chunks:', error);
+    return false;
+  }
+}
 
 function saveWindowState(window) {
   if (!window.isMaximized() && !window.isMinimized()) {
@@ -341,7 +373,18 @@ function createMenu() {
 }
 
 // When the app is ready, create the window and menu
-app.whenReady().then(() => {
+app.whenReady().then(async () => {
+  // Load indexed chunks if available
+  loadIndexedChunks();
+  
+  // Setup Python environment
+  try {
+    await fileSystem.setupPythonEnvironment();
+  } catch (error) {
+    console.error('Failed to setup Python environment:', error);
+    // Continue anyway, we'll show an error in the UI if needed
+  }
+  
   createSplashWindow();
   setTimeout(() => {
     createWindow();
@@ -393,28 +436,67 @@ ipcMain.handle('select-directory', async () => {
 // Handle scanning directory for files
 ipcMain.handle('scan-directory', async (event, directoryPath, fileExtensions = ['.txt', '.md', '.js', '.html', '.css', '.json']) => {
   try {
-    const files = [];
+    // Scan directory for files
+    const allFiles = await fileSystem.scanDirectory(directoryPath, fileExtensions);
     
-    async function scan(currentPath) {
-      const entries = await readdirAsync(currentPath);
+    // DEV LIMIT: Only process the first 25 files
+    const files = isDev ? allFiles.slice(0, 25) : allFiles;
+    console.log(`Found ${allFiles.length} files, processing ${files.length} files (dev limit: ${isDev})`);
+    
+    // Clear existing indexed chunks
+    indexedChunks = [];
+    
+    // Process each file
+    let processedFiles = 0;
+    const totalFiles = files.length;
+    
+    // Process files in batches to avoid memory issues
+    const batchSize = 5;
+    for (let i = 0; i < totalFiles; i += batchSize) {
+      const batch = files.slice(i, i + batchSize);
       
-      for (const entry of entries) {
-        const entryPath = path.join(currentPath, entry);
-        const stats = await statAsync(entryPath);
-        
-        if (stats.isDirectory()) {
-          await scan(entryPath);
-        } else if (stats.isFile()) {
-          const ext = path.extname(entryPath).toLowerCase();
-          if (fileExtensions.includes(ext) || fileExtensions.length === 0) {
-            files.push(entryPath);
-          }
+      // Process each file in the batch
+      const batchChunks = [];
+      for (const filePath of batch) {
+        try {
+          const chunks = await fileSystem.extractTextChunks(filePath);
+          batchChunks.push(...chunks);
+          
+          // Update progress
+          processedFiles++;
+          const progress = Math.round((processedFiles / totalFiles) * 100);
+          mainWindow.webContents.send('indexing-progress', { 
+            progress, 
+            currentFile: filePath,
+            processedFiles,
+            totalFiles,
+            totalFilesFound: allFiles.length
+          });
+        } catch (error) {
+          console.error(`Error processing file ${filePath}:`, error);
+        }
+      }
+      
+      // Generate embeddings for the batch
+      if (batchChunks.length > 0) {
+        try {
+          const chunksWithEmbeddings = await fileSystem.generateEmbeddings(batchChunks);
+          indexedChunks.push(...chunksWithEmbeddings);
+        } catch (error) {
+          console.error('Error generating embeddings:', error);
         }
       }
     }
     
-    await scan(directoryPath);
-    return { success: true, files };
+    // Save indexed chunks to disk
+    saveIndexedChunks();
+    
+    return { 
+      success: true, 
+      files,
+      chunksCount: indexedChunks.length,
+      totalFilesFound: allFiles.length
+    };
   } catch (error) {
     console.error('Error scanning directory:', error);
     return { success: false, error: error.message };
@@ -424,10 +506,32 @@ ipcMain.handle('scan-directory', async (event, directoryPath, fileExtensions = [
 // Handle reading file content
 ipcMain.handle('read-file', async (event, filePath) => {
   try {
-    const content = await readFileAsync(filePath, 'utf8');
+    const content = await fileSystem.readTextFile(filePath);
     return { success: true, content };
   } catch (error) {
     console.error('Error reading file:', error);
+    return { success: false, error: error.message };
+  }
+});
+
+// Handle search
+ipcMain.handle('search', async (event, query) => {
+  try {
+    if (indexedChunks.length === 0) {
+      return { 
+        success: false, 
+        error: 'No documents indexed. Please index a folder first.' 
+      };
+    }
+    
+    const results = await fileSystem.searchChunks(query, indexedChunks);
+    
+    return { 
+      success: true, 
+      results 
+    };
+  } catch (error) {
+    console.error('Error searching:', error);
     return { success: false, error: error.message };
   }
 }); 

@@ -20,6 +20,7 @@ import {
   Stepper,
   Toolbar,
   Typography,
+  TextField,
   useTheme
 } from '@mui/material';
 import {
@@ -64,11 +65,40 @@ const StatusText = styled(Typography)`
   color: ${props => props.color || 'inherit'};
 `;
 
+const SearchResult = styled(Paper)`
+  padding: 16px;
+  margin-bottom: 16px;
+  border-left: 4px solid ${props => props.theme.palette.primary.main};
+  cursor: pointer;
+  transition: all 0.2s ease;
+  
+  &:hover {
+    box-shadow: 0 4px 8px rgba(0, 0, 0, 0.1);
+    transform: translateY(-2px);
+  }
+`;
+
+const SearchResultPath = styled(Typography)`
+  font-size: 12px;
+  color: ${props => props.theme.palette.text.secondary};
+  margin-bottom: 8px;
+`;
+
+const SearchResultScore = styled.span`
+  display: inline-block;
+  padding: 2px 6px;
+  border-radius: 4px;
+  background-color: ${props => props.theme.palette.primary.main};
+  color: white;
+  font-size: 12px;
+  margin-left: 8px;
+`;
+
 // Setup steps
 const steps = [
   'Select Folder',
   'Index Documents',
-  'Ready to Search'
+  'Search Documents'
 ];
 
 function App() {
@@ -83,6 +113,15 @@ function App() {
   const [statusMessage, setStatusMessage] = useState('');
   const [error, setError] = useState(null);
   const [isElectron, setIsElectron] = useState(false);
+  const [searchQuery, setSearchQuery] = useState('');
+  const [searchResults, setSearchResults] = useState([]);
+  const [isSearching, setIsSearching] = useState(false);
+  const [indexingDetails, setIndexingDetails] = useState({
+    currentFile: '',
+    processedFiles: 0,
+    totalFiles: 0,
+    totalFilesFound: 0
+  });
 
   // Check if running in Electron on component mount
   useEffect(() => {
@@ -93,6 +132,16 @@ function App() {
     if (window.electron) {
       window.electron.onFolderSelected((folderPath) => {
         handleFolderSelected(folderPath);
+      });
+      
+      window.electron.onIndexingProgress((progress) => {
+        setProgress(progress.progress);
+        setIndexingDetails({
+          currentFile: progress.currentFile,
+          processedFiles: progress.processedFiles,
+          totalFiles: progress.totalFiles,
+          totalFilesFound: progress.totalFilesFound || progress.totalFiles
+        });
       });
     }
     
@@ -143,21 +192,14 @@ function App() {
       setStatusMessage('Scanning directory...');
       setError(null);
       
-      // Simulate progress updates
-      const progressInterval = setInterval(() => {
-        setProgress(prev => {
-          const newProgress = prev + 5;
-          return newProgress > 90 ? 90 : newProgress;
-        });
-      }, 200);
-      
       const result = await window.electron.scanDirectory(selectedFolder);
-      
-      clearInterval(progressInterval);
       
       if (result.success) {
         setFiles(result.files);
-        setStatusMessage(`Found ${result.files.length} files`);
+        const totalFilesMessage = result.totalFilesFound > result.files.length 
+          ? ` (limited from ${result.totalFilesFound} total files found)` 
+          : '';
+        setStatusMessage(`Found ${result.files.length} files${totalFilesMessage} and created ${result.chunksCount} chunks`);
         setProgress(100);
         setActiveStep(2); // Move to final step
       } else {
@@ -197,6 +239,82 @@ function App() {
     }
   };
 
+  const handleSearch = async () => {
+    if (!searchQuery.trim()) return;
+    
+    try {
+      setIsSearching(true);
+      setStatusMessage('Searching...');
+      setError(null);
+      
+      const result = await window.electron.search(searchQuery);
+      
+      if (result.success) {
+        setSearchResults(result.results);
+        setStatusMessage(`Found ${result.results.length} results for "${searchQuery}"`);
+      } else {
+        setSearchResults([]);
+        setError('Error searching: ' + result.error);
+        setStatusMessage('Error searching: ' + result.error);
+      }
+      
+      setIsSearching(false);
+    } catch (error) {
+      console.error('Error searching:', error);
+      setError(`Error searching: ${error.message}`);
+      setStatusMessage('Error searching: ' + error.message);
+      setIsSearching(false);
+    }
+  };
+
+  const handleSearchResultClick = async (result) => {
+    try {
+      setSelectedFile(result.filePath);
+      setStatusMessage('Loading file...');
+      setError(null);
+      
+      const fileResult = await window.electron.readFile(result.filePath);
+      
+      if (fileResult.success) {
+        setFileContent(fileResult.content);
+        
+        // Scroll to the relevant part of the file
+        setTimeout(() => {
+          const fileContentElement = document.getElementById('file-content');
+          if (fileContentElement) {
+            // Create a temporary element to measure text height
+            const tempElement = document.createElement('div');
+            tempElement.style.fontFamily = 'monospace';
+            tempElement.style.fontSize = '14px';
+            tempElement.style.position = 'absolute';
+            tempElement.style.visibility = 'hidden';
+            tempElement.style.whiteSpace = 'pre-wrap';
+            tempElement.style.width = fileContentElement.clientWidth + 'px';
+            tempElement.textContent = fileResult.content.substring(0, result.startPos);
+            document.body.appendChild(tempElement);
+            
+            // Calculate scroll position
+            const scrollPosition = tempElement.clientHeight;
+            fileContentElement.scrollTop = scrollPosition;
+            
+            // Clean up
+            document.body.removeChild(tempElement);
+          }
+        }, 100);
+        
+        setStatusMessage('File loaded successfully');
+      } else {
+        setFileContent('');
+        setError('Error reading file: ' + fileResult.error);
+        setStatusMessage('Error reading file: ' + fileResult.error);
+      }
+    } catch (error) {
+      console.error('Error reading file:', error);
+      setError(`Error reading file: ${error.message}`);
+      setStatusMessage('Error reading file: ' + error.message);
+    }
+  };
+
   const resetSetup = () => {
     setActiveStep(0);
     setSelectedFolder(null);
@@ -205,6 +323,8 @@ function App() {
     setFileContent('');
     setStatusMessage('');
     setError(null);
+    setSearchQuery('');
+    setSearchResults([]);
   };
 
   // Render different content based on the active step
@@ -278,6 +398,14 @@ function App() {
             {isScanning && (
               <Box sx={{ width: '100%', mt: 2 }}>
                 <LinearProgress variant="determinate" value={progress} />
+                <Typography variant="body2" sx={{ mt: 1 }}>
+                  Processing file {indexingDetails.processedFiles} of {indexingDetails.totalFiles}
+                  {indexingDetails.totalFilesFound > indexingDetails.totalFiles && 
+                    ` (limited from ${indexingDetails.totalFilesFound} total files)`}
+                </Typography>
+                <Typography variant="body2" sx={{ mt: 0.5 }} noWrap>
+                  {indexingDetails.currentFile}
+                </Typography>
               </Box>
             )}
             {statusMessage && (
@@ -298,14 +426,36 @@ function App() {
           <>
             <StyledPaper elevation={3}>
               <Typography variant="h5" gutterBottom>
-                Step 3: Ready to Search
+                Step 3: Search Documents
               </Typography>
               <Typography variant="body1" paragraph>
-                Indexing complete! You can now browse and search through your documents.
+                Indexing complete! You can now search through your documents using natural language.
               </Typography>
               <Typography variant="body2" paragraph>
-                Found {files.length} files in {selectedFolder}
+                Indexed {files.length} files from {selectedFolder}
               </Typography>
+              
+              <Box sx={{ display: 'flex', gap: 1, mb: 2 }}>
+                <TextField
+                  fullWidth
+                  label="Search Query"
+                  variant="outlined"
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                  onKeyPress={(e) => e.key === 'Enter' && handleSearch()}
+                  placeholder="Enter a natural language query like 'Story about a dog and a boy'"
+                />
+                <Button
+                  variant="contained"
+                  color="primary"
+                  startIcon={isSearching ? <CircularProgress size={20} color="inherit" /> : <SearchIcon />}
+                  onClick={handleSearch}
+                  disabled={isSearching || !searchQuery.trim()}
+                >
+                  Search
+                </Button>
+              </Box>
+              
               <Box sx={{ display: 'flex', gap: 2 }}>
                 <Button 
                   variant="outlined" 
@@ -314,72 +464,60 @@ function App() {
                 >
                   Start Over
                 </Button>
-                <Button 
-                  variant="contained" 
-                  color="primary" 
-                  startIcon={<SearchIcon />}
-                  disabled={files.length === 0}
-                >
-                  Search Documents
-                </Button>
               </Box>
             </StyledPaper>
             
-            <Box sx={{ display: 'flex', gap: 3 }}>
-              <Card sx={{ width: 320, maxHeight: 600, overflow: 'auto' }}>
-                <List subheader={
-                  <Box sx={{ p: 2, pb: 0 }}>
-                    <Typography variant="h6">Files ({files.length})</Typography>
-                    <Divider />
-                  </Box>
-                }>
-                  {files.slice(0, 100).map((file, index) => (
-                    <ListItem key={index} disablePadding>
-                      <ListItemButton onClick={() => handleFileClick(file)}>
-                        <DescriptionIcon sx={{ mr: 1, color: 'primary.light' }} />
-                        <ListItemText 
-                          primary={file.split(/[\\/]/).pop()} 
-                          primaryTypographyProps={{ 
-                            noWrap: true,
-                            style: { maxWidth: '220px' }
-                          }}
-                        />
-                      </ListItemButton>
-                    </ListItem>
-                  ))}
-                  {files.length > 100 && (
-                    <ListItem>
-                      <ListItemText 
-                        secondary={`Showing 100 of ${files.length} files`} 
-                        secondaryTypographyProps={{ align: 'center' }}
-                      />
-                    </ListItem>
-                  )}
-                </List>
-              </Card>
-              
-              {selectedFile && (
-                <Card sx={{ flex: 1, maxHeight: 600, overflow: 'auto' }}>
-                  <Box sx={{ p: 2 }}>
-                    <Typography variant="subtitle1" noWrap>
-                      {selectedFile.split(/[\\/]/).pop()}
+            {searchResults.length > 0 && (
+              <StyledPaper elevation={3}>
+                <Typography variant="h6" gutterBottom>
+                  Search Results
+                </Typography>
+                <Divider sx={{ mb: 2 }} />
+                
+                {searchResults.map((result, index) => (
+                  <SearchResult 
+                    key={index} 
+                    elevation={1} 
+                    onClick={() => handleSearchResultClick(result)}
+                    theme={theme}
+                  >
+                    <SearchResultPath theme={theme}>
+                      {result.filePath}
+                      <SearchResultScore theme={theme}>
+                        {Math.round(result.score * 100)}%
+                      </SearchResultScore>
+                    </SearchResultPath>
+                    <Typography variant="body1">
+                      {result.text.length > 300 
+                        ? result.text.substring(0, 300) + '...' 
+                        : result.text}
                     </Typography>
-                    <Divider sx={{ my: 1 }} />
-                    {fileContent ? (
-                      <FileContent>
-                        {fileContent.length > 5000 
-                          ? fileContent.substring(0, 5000) + '...' 
-                          : fileContent}
-                      </FileContent>
-                    ) : (
-                      <Box sx={{ display: 'flex', justifyContent: 'center', p: 3 }}>
-                        <CircularProgress />
-                      </Box>
-                    )}
-                  </Box>
-                </Card>
-              )}
-            </Box>
+                  </SearchResult>
+                ))}
+              </StyledPaper>
+            )}
+            
+            {selectedFile && (
+              <Card sx={{ maxHeight: 600, overflow: 'auto', mt: 2 }}>
+                <Box sx={{ p: 2 }}>
+                  <Typography variant="subtitle1" noWrap>
+                    {selectedFile.split(/[\\/]/).pop()}
+                  </Typography>
+                  <Divider sx={{ my: 1 }} />
+                  {fileContent ? (
+                    <FileContent id="file-content">
+                      {fileContent.length > 10000 
+                        ? fileContent.substring(0, 10000) + '...' 
+                        : fileContent}
+                    </FileContent>
+                  ) : (
+                    <Box sx={{ display: 'flex', justifyContent: 'center', p: 3 }}>
+                      <CircularProgress />
+                    </Box>
+                  )}
+                </Box>
+              </Card>
+            )}
           </>
         );
       
