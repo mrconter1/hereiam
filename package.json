@@ -2,17 +2,14 @@
   "name": "hereiam",
   "version": "1.0.0",
   "description": "A local document search application with natural language queries",
-  "main": "dist/main/index.js",
+  "main": "hereiam-main.js",
   "scripts": {
-    "dev": "npm run build:main && concurrently \"npm run dev:vite\" \"npm run dev:electron\"",
-    "dev:vite": "vite",
-    "dev:electron": "cross-env NODE_ENV=development electron .",
+    "start": "concurrently \"vite\" \"node_modules\\.bin\\electron.cmd .\"",
+    "dev": "concurrently \"vite\" \"node_modules\\.bin\\electron.cmd .\"",
     "dev:browser": "vite --host",
-    "build": "npm run build:vite && npm run build:main && npm run build:electron",
+    "build": "vite build && electron-builder",
     "build:vite": "vite build",
-    "build:main": "node electron.js",
     "build:electron": "electron-builder",
-    "start": "electron .",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "build": {
@@ -35,12 +32,21 @@
       "target": "AppImage"
     }
   },
-  "keywords": ["search", "document", "vector", "embedding", "electron", "react"],
+  "keywords": [
+    "search",
+    "document",
+    "vector",
+    "embedding",
+    "electron",
+    "react"
+  ],
   "author": "",
   "license": "ISC",
   "dependencies": {
     "@emotion/react": "^11.14.0",
     "@emotion/styled": "^11.14.0",
+    "@mui/icons-material": "^6.4.7",
+    "@mui/material": "^6.4.7",
     "electron": "^35.0.1",
     "electron-builder": "^25.1.8",
     "react": "^19.0.0",

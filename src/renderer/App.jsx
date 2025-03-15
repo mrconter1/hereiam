@@ -1,130 +1,77 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import styled from '@emotion/styled';
+import {
+  AppBar,
+  Box,
+  Button,
+  Card,
+  CircularProgress,
+  Container,
+  Divider,
+  IconButton,
+  LinearProgress,
+  List,
+  ListItem,
+  ListItemButton,
+  ListItemText,
+  Paper,
+  Step,
+  StepLabel,
+  Stepper,
+  Toolbar,
+  Typography
+} from '@mui/material';
+import {
+  Folder as FolderIcon,
+  Search as SearchIcon,
+  Settings as SettingsIcon,
+  ArrowBack as ArrowBackIcon,
+  Description as DescriptionIcon
+} from '@mui/icons-material';
 
-const Container = styled.div`
+const AppContainer = styled.div`
   display: flex;
   flex-direction: column;
   height: 100vh;
-  padding: 20px;
-`;
-
-const Header = styled.header`
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  margin-bottom: 20px;
-`;
-
-const Title = styled.h1`
-  font-size: 24px;
-  color: var(--primary-color);
+  background-color: var(--background-color);
 `;
 
 const MainContent = styled.main`
   flex: 1;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  background-color: white;
-  border-radius: 8px;
-  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.05);
-  padding: 40px;
+  padding: 24px;
   overflow: auto;
 `;
 
-const WelcomeMessage = styled.div`
-  text-align: center;
-  max-width: 600px;
-  margin-bottom: 30px;
+const StyledPaper = styled(Paper)`
+  padding: 24px;
+  margin-bottom: 24px;
 `;
 
-const Button = styled.button`
-  padding: 12px 24px;
-  font-size: 16px;
-  background-color: var(--primary-color);
-  color: white;
-  border: none;
-  border-radius: 4px;
-  cursor: pointer;
-  transition: background-color 0.2s;
-
-  &:hover {
-    background-color: var(--secondary-color);
-  }
-
-  &:disabled {
-    background-color: var(--dark-gray);
-    cursor: not-allowed;
-  }
-`;
-
-const FolderPath = styled.div`
-  margin-top: 20px;
-  padding: 10px;
-  background-color: var(--background-color);
-  border-radius: 4px;
-  font-family: monospace;
-  max-width: 100%;
-  overflow: hidden;
-  text-overflow: ellipsis;
-`;
-
-const FileList = styled.div`
-  margin-top: 20px;
-  width: 100%;
-  max-width: 800px;
-  text-align: left;
-`;
-
-const FileItem = styled.div`
-  padding: 8px;
-  margin-bottom: 4px;
-  background-color: var(--background-color);
-  border-radius: 4px;
-  cursor: pointer;
-  
-  &:hover {
-    background-color: var(--light-gray);
-  }
-`;
-
-const FileContent = styled.div`
-  margin-top: 20px;
-  padding: 16px;
-  background-color: var(--background-color);
-  border-radius: 4px;
-  width: 100%;
-  max-width: 800px;
-  max-height: 400px;
-  overflow: auto;
+const FileContent = styled.pre`
   white-space: pre-wrap;
   font-family: monospace;
-`;
-
-const ProgressBar = styled.div`
-  width: 100%;
-  max-width: 800px;
-  height: 8px;
-  background-color: var(--light-gray);
+  font-size: 14px;
+  padding: 16px;
+  background-color: #f5f5f5;
   border-radius: 4px;
-  margin-top: 20px;
-  overflow: hidden;
+  overflow: auto;
+  max-height: 400px;
 `;
 
-const ProgressFill = styled.div`
-  height: 100%;
-  background-color: var(--accent-color);
-  width: ${props => props.progress}%;
-  transition: width 0.3s ease;
+const StatusText = styled(Typography)`
+  margin-top: 16px;
+  color: ${props => props.color || 'inherit'};
 `;
 
-const StatusMessage = styled.div`
-  margin-top: 10px;
-  color: var(--dark-gray);
-`;
+// Setup steps
+const steps = [
+  'Select Folder',
+  'Index Documents',
+  'Ready to Search'
+];
 
 function App() {
+  const [activeStep, setActiveStep] = useState(0);
   const [selectedFolder, setSelectedFolder] = useState(null);
   const [isScanning, setIsScanning] = useState(false);
   const [files, setFiles] = useState([]);
@@ -132,11 +79,20 @@ function App() {
   const [fileContent, setFileContent] = useState('');
   const [progress, setProgress] = useState(0);
   const [statusMessage, setStatusMessage] = useState('');
+  const [error, setError] = useState(null);
+  const [isElectron, setIsElectron] = useState(false);
+
+  // Check if running in Electron on component mount
+  useEffect(() => {
+    // Check if the electron object is available in window
+    setIsElectron(!!window.electron);
+  }, []);
 
   const handleSelectFolder = async () => {
     try {
+      setError(null);
       // Check if we're in Electron environment
-      if (window.electron) {
+      if (isElectron) {
         const result = await window.electron.selectDirectory();
         
         if (!result.canceled && result.filePaths.length > 0) {
@@ -145,38 +101,55 @@ function App() {
           setFiles([]);
           setSelectedFile(null);
           setFileContent('');
-          
-          // Start scanning the directory
-          await scanDirectory(folderPath);
+          setStatusMessage(`Selected folder: ${folderPath}`);
+          setActiveStep(1); // Move to next step
         }
       } else {
         console.log('Not running in Electron');
+        setError('Not running in Electron environment. This feature requires the desktop application.');
       }
     } catch (error) {
       console.error('Error selecting folder:', error);
+      setError(`Error selecting folder: ${error.message}`);
       setStatusMessage('Error selecting folder: ' + error.message);
     }
   };
 
-  const scanDirectory = async (folderPath) => {
+  const scanDirectory = async () => {
+    if (!selectedFolder) return;
+    
     try {
       setIsScanning(true);
       setProgress(0);
       setStatusMessage('Scanning directory...');
+      setError(null);
       
-      const result = await window.electron.scanDirectory(folderPath);
+      // Simulate progress updates
+      const progressInterval = setInterval(() => {
+        setProgress(prev => {
+          const newProgress = prev + 5;
+          return newProgress > 90 ? 90 : newProgress;
+        });
+      }, 200);
+      
+      const result = await window.electron.scanDirectory(selectedFolder);
+      
+      clearInterval(progressInterval);
       
       if (result.success) {
         setFiles(result.files);
         setStatusMessage(`Found ${result.files.length} files`);
+        setProgress(100);
+        setActiveStep(2); // Move to final step
       } else {
+        setError('Error scanning directory: ' + result.error);
         setStatusMessage('Error scanning directory: ' + result.error);
       }
       
-      setProgress(100);
       setIsScanning(false);
     } catch (error) {
       console.error('Error scanning directory:', error);
+      setError(`Error scanning directory: ${error.message}`);
       setStatusMessage('Error scanning directory: ' + error.message);
       setIsScanning(false);
     }
@@ -186,6 +159,7 @@ function App() {
     try {
       setSelectedFile(filePath);
       setStatusMessage('Loading file...');
+      setError(null);
       
       const result = await window.electron.readFile(filePath);
       
@@ -194,77 +168,233 @@ function App() {
         setStatusMessage('File loaded successfully');
       } else {
         setFileContent('');
+        setError('Error reading file: ' + result.error);
         setStatusMessage('Error reading file: ' + result.error);
       }
     } catch (error) {
       console.error('Error reading file:', error);
+      setError(`Error reading file: ${error.message}`);
       setStatusMessage('Error reading file: ' + error.message);
     }
   };
 
-  return (
-    <Container>
-      <Header>
-        <Title>HereIAm</Title>
-      </Header>
-      
-      <MainContent>
-        {!selectedFolder ? (
-          <>
-            <WelcomeMessage>
-              <h2>Welcome to HereIAm</h2>
-              <p>Select a folder to index your documents and start searching through them with natural language queries.</p>
-            </WelcomeMessage>
-            
-            <Button onClick={handleSelectFolder} disabled={isScanning}>
+  const resetSetup = () => {
+    setActiveStep(0);
+    setSelectedFolder(null);
+    setFiles([]);
+    setSelectedFile(null);
+    setFileContent('');
+    setStatusMessage('');
+    setError(null);
+  };
+
+  // Render different content based on the active step
+  const renderStepContent = () => {
+    switch (activeStep) {
+      case 0:
+        return (
+          <StyledPaper elevation={3}>
+            <Typography variant="h5" gutterBottom>
+              Step 1: Select a Folder
+            </Typography>
+            <Typography variant="body1" paragraph>
+              Choose a folder containing the documents you want to index and search through.
+            </Typography>
+            <Button 
+              variant="contained" 
+              color="primary" 
+              startIcon={<FolderIcon />}
+              onClick={handleSelectFolder}
+              size="large"
+              disabled={!isElectron}
+            >
               Select Folder
             </Button>
-          </>
-        ) : (
-          <>
-            <FolderPath>
-              Selected folder: {selectedFolder}
-            </FolderPath>
-            
-            <Button onClick={handleSelectFolder} disabled={isScanning} style={{ marginTop: '10px' }}>
-              Change Folder
-            </Button>
-            
+            {!isElectron && (
+              <StatusText color="warning.main" variant="body2" sx={{ mt: 2 }}>
+                Note: You are running in browser mode. To use folder selection, please run the desktop application.
+              </StatusText>
+            )}
+            {error && (
+              <StatusText color="error.main" variant="body2">
+                {error}
+              </StatusText>
+            )}
+          </StyledPaper>
+        );
+      
+      case 1:
+        return (
+          <StyledPaper elevation={3}>
+            <Typography variant="h5" gutterBottom>
+              Step 2: Index Documents
+            </Typography>
+            <Typography variant="body1" paragraph>
+              Selected folder: <strong>{selectedFolder}</strong>
+            </Typography>
+            <Typography variant="body1" paragraph>
+              Click the button below to scan and index all documents in the selected folder.
+            </Typography>
+            <Box sx={{ display: 'flex', gap: 2 }}>
+              <Button 
+                variant="outlined" 
+                startIcon={<ArrowBackIcon />}
+                onClick={resetSetup}
+              >
+                Back
+              </Button>
+              <Button 
+                variant="contained" 
+                color="primary" 
+                startIcon={isScanning ? <CircularProgress size={20} color="inherit" /> : <SearchIcon />}
+                onClick={scanDirectory}
+                disabled={isScanning || !isElectron}
+              >
+                {isScanning ? 'Indexing...' : 'Start Indexing'}
+              </Button>
+            </Box>
             {isScanning && (
-              <ProgressBar>
-                <ProgressFill progress={progress} />
-              </ProgressBar>
+              <Box sx={{ width: '100%', mt: 2 }}>
+                <LinearProgress variant="determinate" value={progress} />
+              </Box>
             )}
-            
             {statusMessage && (
-              <StatusMessage>{statusMessage}</StatusMessage>
+              <StatusText variant="body2">
+                {statusMessage}
+              </StatusText>
             )}
+            {error && (
+              <StatusText color="error.main" variant="body2">
+                {error}
+              </StatusText>
+            )}
+          </StyledPaper>
+        );
+      
+      case 2:
+        return (
+          <>
+            <StyledPaper elevation={3}>
+              <Typography variant="h5" gutterBottom>
+                Step 3: Ready to Search
+              </Typography>
+              <Typography variant="body1" paragraph>
+                Indexing complete! You can now browse and search through your documents.
+              </Typography>
+              <Typography variant="body2" paragraph>
+                Found {files.length} files in {selectedFolder}
+              </Typography>
+              <Box sx={{ display: 'flex', gap: 2 }}>
+                <Button 
+                  variant="outlined" 
+                  startIcon={<ArrowBackIcon />}
+                  onClick={resetSetup}
+                >
+                  Start Over
+                </Button>
+                <Button 
+                  variant="contained" 
+                  color="primary" 
+                  startIcon={<SearchIcon />}
+                  disabled={files.length === 0}
+                >
+                  Search Documents
+                </Button>
+              </Box>
+            </StyledPaper>
             
-            {files.length > 0 && (
-              <FileList>
-                <h3>Files ({files.length})</h3>
-                {files.slice(0, 10).map((file, index) => (
-                  <FileItem key={index} onClick={() => handleFileClick(file)}>
-                    {file.split(/[\\/]/).pop()} {/* Display just the filename */}
-                  </FileItem>
-                ))}
-                {files.length > 10 && (
-                  <StatusMessage>Showing 10 of {files.length} files</StatusMessage>
-                )}
-              </FileList>
-            )}
-            
-            {selectedFile && fileContent && (
-              <FileContent>
-                {fileContent.length > 1000 
-                  ? fileContent.substring(0, 1000) + '...' 
-                  : fileContent}
-              </FileContent>
-            )}
+            <Box sx={{ display: 'flex', gap: 3 }}>
+              <Card sx={{ width: 320, maxHeight: 600, overflow: 'auto' }}>
+                <List subheader={
+                  <Box sx={{ p: 2, pb: 0 }}>
+                    <Typography variant="h6">Files ({files.length})</Typography>
+                    <Divider />
+                  </Box>
+                }>
+                  {files.slice(0, 100).map((file, index) => (
+                    <ListItem key={index} disablePadding>
+                      <ListItemButton onClick={() => handleFileClick(file)}>
+                        <DescriptionIcon sx={{ mr: 1, color: 'primary.light' }} />
+                        <ListItemText 
+                          primary={file.split(/[\\/]/).pop()} 
+                          primaryTypographyProps={{ 
+                            noWrap: true,
+                            style: { maxWidth: '220px' }
+                          }}
+                        />
+                      </ListItemButton>
+                    </ListItem>
+                  ))}
+                  {files.length > 100 && (
+                    <ListItem>
+                      <ListItemText 
+                        secondary={`Showing 100 of ${files.length} files`} 
+                        secondaryTypographyProps={{ align: 'center' }}
+                      />
+                    </ListItem>
+                  )}
+                </List>
+              </Card>
+              
+              {selectedFile && (
+                <Card sx={{ flex: 1, maxHeight: 600, overflow: 'auto' }}>
+                  <Box sx={{ p: 2 }}>
+                    <Typography variant="subtitle1" noWrap>
+                      {selectedFile.split(/[\\/]/).pop()}
+                    </Typography>
+                    <Divider sx={{ my: 1 }} />
+                    {fileContent ? (
+                      <FileContent>
+                        {fileContent.length > 5000 
+                          ? fileContent.substring(0, 5000) + '...' 
+                          : fileContent}
+                      </FileContent>
+                    ) : (
+                      <Box sx={{ display: 'flex', justifyContent: 'center', p: 3 }}>
+                        <CircularProgress />
+                      </Box>
+                    )}
+                  </Box>
+                </Card>
+              )}
+            </Box>
           </>
-        )}
+        );
+      
+      default:
+        return null;
+    }
+  };
+
+  return (
+    <AppContainer>
+      <AppBar position="static">
+        <Toolbar>
+          <Typography variant="h6" component="div" sx={{ flexGrow: 1 }}>
+            HereIAm
+          </Typography>
+          <IconButton color="inherit">
+            <SettingsIcon />
+          </IconButton>
+        </Toolbar>
+      </AppBar>
+      
+      <MainContent>
+        <Container maxWidth="lg">
+          <Box sx={{ mb: 4 }}>
+            <Stepper activeStep={activeStep}>
+              {steps.map((label) => (
+                <Step key={label}>
+                  <StepLabel>{label}</StepLabel>
+                </Step>
+              ))}
+            </Stepper>
+          </Box>
+          
+          {renderStepContent()}
+        </Container>
       </MainContent>
-    </Container>
+    </AppContainer>
   );
 }
 
