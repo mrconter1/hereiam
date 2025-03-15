@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, dialog } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog, globalShortcut } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const { promisify } = require('util');
@@ -15,6 +15,10 @@ function createWindow() {
   mainWindow = new BrowserWindow({
     width: 1200,
     height: 800,
+    minWidth: 800,
+    minHeight: 600,
+    backgroundColor: '#f5f7fa',
+    show: false, // Don't show until ready
     webPreferences: {
       nodeIntegration: false,
       contextIsolation: true,
@@ -25,8 +29,10 @@ function createWindow() {
   // Load the Vite dev server in development
   mainWindow.loadURL('http://localhost:5173');
   
-  // Open DevTools in development
-  mainWindow.webContents.openDevTools();
+  // Show window when ready to avoid flickering
+  mainWindow.once('ready-to-show', () => {
+    mainWindow.show();
+  });
 
   mainWindow.on('closed', () => {
     mainWindow = null;
@@ -34,7 +40,25 @@ function createWindow() {
 }
 
 // When the app is ready, create the window
-app.whenReady().then(createWindow);
+app.whenReady().then(() => {
+  createWindow();
+  
+  // Register a keyboard shortcut to toggle DevTools (Ctrl+Shift+I)
+  globalShortcut.register('CommandOrControl+Shift+I', () => {
+    if (mainWindow) {
+      if (mainWindow.webContents.isDevToolsOpened()) {
+        mainWindow.webContents.closeDevTools();
+      } else {
+        mainWindow.webContents.openDevTools();
+      }
+    }
+  });
+});
+
+// Unregister shortcuts when app is quitting
+app.on('will-quit', () => {
+  globalShortcut.unregisterAll();
+});
 
 // Quit when all windows are closed, except on macOS
 app.on('window-all-closed', () => {
