@@ -19,7 +19,8 @@ import {
   StepLabel,
   Stepper,
   Toolbar,
-  Typography
+  Typography,
+  useTheme
 } from '@mui/material';
 import {
   Folder as FolderIcon,
@@ -71,6 +72,7 @@ const steps = [
 ];
 
 function App() {
+  const theme = useTheme();
   const [activeStep, setActiveStep] = useState(0);
   const [selectedFolder, setSelectedFolder] = useState(null);
   const [isScanning, setIsScanning] = useState(false);
@@ -86,7 +88,30 @@ function App() {
   useEffect(() => {
     // Check if the electron object is available in window
     setIsElectron(!!window.electron);
+    
+    // Set up event listener for folder selection from the menu
+    if (window.electron) {
+      window.electron.onFolderSelected((folderPath) => {
+        handleFolderSelected(folderPath);
+      });
+    }
+    
+    // Clean up event listeners when component unmounts
+    return () => {
+      if (window.electron) {
+        window.electron.removeAllListeners();
+      }
+    };
   }, []);
+
+  const handleFolderSelected = (folderPath) => {
+    setSelectedFolder(folderPath);
+    setFiles([]);
+    setSelectedFile(null);
+    setFileContent('');
+    setStatusMessage(`Selected folder: ${folderPath}`);
+    setActiveStep(1); // Move to next step
+  };
 
   const handleSelectFolder = async () => {
     try {
@@ -96,13 +121,7 @@ function App() {
         const result = await window.electron.selectDirectory();
         
         if (!result.canceled && result.filePaths.length > 0) {
-          const folderPath = result.filePaths[0];
-          setSelectedFolder(folderPath);
-          setFiles([]);
-          setSelectedFile(null);
-          setFileContent('');
-          setStatusMessage(`Selected folder: ${folderPath}`);
-          setActiveStep(1); // Move to next step
+          handleFolderSelected(result.filePaths[0]);
         }
       } else {
         console.log('Not running in Electron');
@@ -210,6 +229,9 @@ function App() {
             >
               Select Folder
             </Button>
+            <Typography variant="body2" color="textSecondary" sx={{ mt: 2 }}>
+              You can also use the keyboard shortcut Ctrl+O or select File → Open Folder from the menu.
+            </Typography>
             {!isElectron && (
               <StatusText color="warning.main" variant="body2" sx={{ mt: 2 }}>
                 Note: You are running in browser mode. To use folder selection, please run the desktop application.
@@ -368,12 +390,12 @@ function App() {
 
   return (
     <AppContainer>
-      <AppBar position="static">
+      <AppBar position="static" color="primary">
         <Toolbar>
           <Typography variant="h6" component="div" sx={{ flexGrow: 1 }}>
             HereIAm
           </Typography>
-          <IconButton color="inherit">
+          <IconButton color="inherit" size="large">
             <SettingsIcon />
           </IconButton>
         </Toolbar>

@@ -4,12 +4,13 @@
   "description": "A local document search application with natural language queries",
   "main": "hereiam-main.js",
   "scripts": {
-    "start": "concurrently \"vite\" \"node_modules\\.bin\\electron.cmd .\"",
-    "dev": "concurrently \"vite\" \"node_modules\\.bin\\electron.cmd .\"",
+    "start": "cross-env NODE_ENV=development concurrently \"vite\" \"node_modules\\.bin\\electron.cmd .\"",
+    "dev": "cross-env NODE_ENV=development concurrently \"vite\" \"node_modules\\.bin\\electron.cmd .\"",
     "dev:browser": "vite --host",
-    "build": "vite build && electron-builder",
+    "build": "npm run build:vite && npm run build:electron",
     "build:vite": "vite build",
     "build:electron": "electron-builder",
+    "generate-icons": "electron-icon-builder --input=./assets/icon.svg --output=./assets --flatten",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "build": {
@@ -17,19 +18,24 @@
     "productName": "HereIAm",
     "files": [
       "dist/**/*",
-      "node_modules/**/*"
+      "hereiam-main.js",
+      "src/main/**/*",
+      "assets/**/*"
     ],
     "directories": {
       "output": "release"
     },
     "win": {
-      "target": "nsis"
+      "target": "nsis",
+      "icon": "assets/icon.png"
     },
     "mac": {
-      "target": "dmg"
+      "target": "dmg",
+      "icon": "assets/icon.png"
     },
     "linux": {
-      "target": "AppImage"
+      "target": "AppImage",
+      "icon": "assets/icon.png"
     }
   },
   "keywords": [
@@ -47,6 +53,7 @@
     "@emotion/styled": "^11.14.0",
     "@mui/icons-material": "^6.4.7",
     "@mui/material": "^6.4.7",
+    "canvas": "^3.1.0",
     "electron": "^35.0.1",
     "electron-builder": "^25.1.8",
     "react": "^19.0.0",
@@ -56,6 +63,7 @@
     "@vitejs/plugin-react": "^4.3.4",
     "concurrently": "^9.1.2",
     "cross-env": "^7.0.3",
+    "electron-icon-builder": "^2.0.1",
     "electron-is-dev": "^3.0.1",
     "vite": "^6.2.2",
     "wait-on": "^8.0.3"
