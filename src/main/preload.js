@@ -9,6 +9,7 @@ contextBridge.exposeInMainWorld(
     scanDirectory: (directoryPath) => ipcRenderer.invoke('scan-directory', directoryPath),
     readFile: (filePath) => ipcRenderer.invoke('read-file', filePath),
     search: (query) => ipcRenderer.invoke('search', query),
+    checkIndexedData: () => ipcRenderer.invoke('check-indexed-data'),
     onFolderSelected: (callback) => {
       ipcRenderer.on('folder-selected', (event, folderPath) => {
         callback(folderPath);

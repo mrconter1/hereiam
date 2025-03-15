@@ -15,9 +15,7 @@ import {
   ListItemButton,
   ListItemText,
   Paper,
-  Step,
-  StepLabel,
-  Stepper,
+  Drawer,
   Toolbar,
   Typography,
   TextField,
@@ -28,7 +26,9 @@ import {
   Search as SearchIcon,
   Settings as SettingsIcon,
   ArrowBack as ArrowBackIcon,
-  Description as DescriptionIcon
+  Description as DescriptionIcon,
+  Refresh as RefreshIcon,
+  Close as CloseIcon
 } from '@mui/icons-material';
 
 const AppContainer = styled.div`
@@ -94,16 +94,15 @@ const SearchResultScore = styled.span`
   margin-left: 8px;
 `;
 
-// Setup steps
-const steps = [
-  'Select Folder',
-  'Index Documents',
-  'Search Documents'
-];
+const SearchBox = styled(Box)`
+  display: flex;
+  gap: 16px;
+  margin-bottom: 24px;
+`;
 
 function App() {
   const theme = useTheme();
-  const [activeStep, setActiveStep] = useState(0);
+  const [settingsOpen, setSettingsOpen] = useState(false);
   const [selectedFolder, setSelectedFolder] = useState(null);
   const [isScanning, setIsScanning] = useState(false);
   const [files, setFiles] = useState([]);
@@ -116,6 +115,8 @@ function App() {
   const [searchQuery, setSearchQuery] = useState('');
   const [searchResults, setSearchResults] = useState([]);
   const [isSearching, setIsSearching] = useState(false);
+  const [hasIndexedData, setHasIndexedData] = useState(false);
+  const [needsInitialSetup, setNeedsInitialSetup] = useState(true);
   const [indexingDetails, setIndexingDetails] = useState({
     currentFile: '',
     processedFiles: 0,
@@ -143,6 +144,9 @@ function App() {
           totalFilesFound: progress.totalFilesFound || progress.totalFiles
         });
       });
+
+      // Check if we have indexed data
+      checkForIndexedData();
     }
     
     // Clean up event listeners when component unmounts
@@ -153,13 +157,35 @@ function App() {
     };
   }, []);
 
+  // Check if we have indexed data
+  const checkForIndexedData = async () => {
+    try {
+      const result = await window.electron.checkIndexedData();
+      if (result.success) {
+        setHasIndexedData(result.hasData);
+        setSelectedFolder(result.folderPath || null);
+        setNeedsInitialSetup(!result.hasData);
+        
+        if (result.hasData) {
+          setStatusMessage(`Loaded ${result.chunksCount} indexed chunks from ${result.folderPath}`);
+        }
+      }
+    } catch (error) {
+      console.error('Error checking indexed data:', error);
+    }
+  };
+
   const handleFolderSelected = (folderPath) => {
     setSelectedFolder(folderPath);
     setFiles([]);
     setSelectedFile(null);
     setFileContent('');
     setStatusMessage(`Selected folder: ${folderPath}`);
-    setActiveStep(1); // Move to next step
+    
+    // If we're in settings, don't start indexing automatically
+    if (!settingsOpen) {
+      scanDirectory(folderPath);
+    }
   };
 
   const handleSelectFolder = async () => {
@@ -183,8 +209,8 @@ function App() {
     }
   };
 
-  const scanDirectory = async () => {
-    if (!selectedFolder) return;
+  const scanDirectory = async (folderToScan = selectedFolder) => {
+    if (!folderToScan) return;
     
     try {
       setIsScanning(true);
@@ -192,7 +218,7 @@ function App() {
       setStatusMessage('Scanning directory...');
       setError(null);
       
-      const result = await window.electron.scanDirectory(selectedFolder);
+      const result = await window.electron.scanDirectory(folderToScan);
       
       if (result.success) {
         setFiles(result.files);
@@ -201,7 +227,11 @@ function App() {
           : '';
         setStatusMessage(`Found ${result.files.length} files${totalFilesMessage} and created ${result.chunksCount} chunks`);
         setProgress(100);
-        setActiveStep(2); // Move to final step
+        setHasIndexedData(true);
+        setNeedsInitialSetup(false);
+        
+        // Close settings drawer if open
+        setSettingsOpen(false);
       } else {
         setError('Error scanning directory: ' + result.error);
         setStatusMessage('Error scanning directory: ' + result.error);
@@ -315,216 +345,213 @@ function App() {
     }
   };
 
-  const resetSetup = () => {
-    setActiveStep(0);
-    setSelectedFolder(null);
-    setFiles([]);
-    setSelectedFile(null);
-    setFileContent('');
-    setStatusMessage('');
-    setError(null);
-    setSearchQuery('');
-    setSearchResults([]);
+  const toggleSettings = () => {
+    setSettingsOpen(!settingsOpen);
   };
 
-  // Render different content based on the active step
-  const renderStepContent = () => {
-    switch (activeStep) {
-      case 0:
-        return (
-          <StyledPaper elevation={3}>
-            <Typography variant="h5" gutterBottom>
-              Step 1: Select a Folder
-            </Typography>
-            <Typography variant="body1" paragraph>
-              Choose a folder containing the documents you want to index and search through.
-            </Typography>
-            <Button 
-              variant="contained" 
-              color="primary" 
-              startIcon={<FolderIcon />}
-              onClick={handleSelectFolder}
-              size="large"
-              disabled={!isElectron}
+  // Render the initial setup screen
+  const renderInitialSetup = () => (
+    <StyledPaper elevation={3}>
+      <Typography variant="h5" gutterBottom>
+        Welcome to HereIAm
+      </Typography>
+      <Typography variant="body1" paragraph>
+        To get started, select a folder containing the documents you want to index and search through.
+      </Typography>
+      <Button 
+        variant="contained" 
+        color="primary" 
+        startIcon={<FolderIcon />}
+        onClick={handleSelectFolder}
+        size="large"
+        disabled={!isElectron}
+      >
+        Select Folder
+      </Button>
+      <Typography variant="body2" color="textSecondary" sx={{ mt: 2 }}>
+        You can also use the keyboard shortcut Ctrl+O or select File → Open Folder from the menu.
+      </Typography>
+      {!isElectron && (
+        <StatusText color="warning.main" variant="body2" sx={{ mt: 2 }}>
+          Note: You are running in browser mode. To use folder selection, please run the desktop application.
+        </StatusText>
+      )}
+      {error && (
+        <StatusText color="error.main" variant="body2">
+          {error}
+        </StatusText>
+      )}
+    </StyledPaper>
+  );
+
+  // Render the main search interface
+  const renderSearchInterface = () => (
+    <>
+      <StyledPaper elevation={3}>
+        <SearchBox>
+          <TextField
+            fullWidth
+            label="Search Query"
+            variant="outlined"
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            onKeyPress={(e) => e.key === 'Enter' && handleSearch()}
+            placeholder="Enter a natural language query like 'Story about a dog and a boy'"
+          />
+          <Button
+            variant="contained"
+            color="primary"
+            startIcon={isSearching ? <CircularProgress size={20} color="inherit" /> : <SearchIcon />}
+            onClick={handleSearch}
+            disabled={isSearching || !searchQuery.trim() || !hasIndexedData}
+          >
+            Search
+          </Button>
+        </SearchBox>
+        
+        {statusMessage && (
+          <StatusText variant="body2">
+            {statusMessage}
+          </StatusText>
+        )}
+        
+        {error && (
+          <StatusText color="error.main" variant="body2">
+            {error}
+          </StatusText>
+        )}
+      </StyledPaper>
+      
+      {searchResults.length > 0 && (
+        <StyledPaper elevation={3}>
+          <Typography variant="h6" gutterBottom>
+            Search Results
+          </Typography>
+          <Divider sx={{ mb: 2 }} />
+          
+          {searchResults.map((result, index) => (
+            <SearchResult 
+              key={index} 
+              elevation={1} 
+              onClick={() => handleSearchResultClick(result)}
+              theme={theme}
             >
-              Select Folder
-            </Button>
-            <Typography variant="body2" color="textSecondary" sx={{ mt: 2 }}>
-              You can also use the keyboard shortcut Ctrl+O or select File → Open Folder from the menu.
-            </Typography>
-            {!isElectron && (
-              <StatusText color="warning.main" variant="body2" sx={{ mt: 2 }}>
-                Note: You are running in browser mode. To use folder selection, please run the desktop application.
-              </StatusText>
-            )}
-            {error && (
-              <StatusText color="error.main" variant="body2">
-                {error}
-              </StatusText>
-            )}
-          </StyledPaper>
-        );
+              <SearchResultPath theme={theme}>
+                {result.filePath}
+                <SearchResultScore theme={theme}>
+                  {Math.round(result.score * 100)}%
+                </SearchResultScore>
+              </SearchResultPath>
+              <Typography variant="body1">
+                {result.text.length > 300 
+                  ? result.text.substring(0, 300) + '...' 
+                  : result.text}
+              </Typography>
+            </SearchResult>
+          ))}
+        </StyledPaper>
+      )}
       
-      case 1:
-        return (
-          <StyledPaper elevation={3}>
-            <Typography variant="h5" gutterBottom>
-              Step 2: Index Documents
+      {selectedFile && (
+        <Card sx={{ maxHeight: 600, overflow: 'auto', mt: 2 }}>
+          <Box sx={{ p: 2 }}>
+            <Typography variant="subtitle1" noWrap>
+              {selectedFile.split(/[\\/]/).pop()}
             </Typography>
-            <Typography variant="body1" paragraph>
-              Selected folder: <strong>{selectedFolder}</strong>
+            <Divider sx={{ my: 1 }} />
+            {fileContent ? (
+              <FileContent id="file-content">
+                {fileContent.length > 10000 
+                  ? fileContent.substring(0, 10000) + '...' 
+                  : fileContent}
+              </FileContent>
+            ) : (
+              <Box sx={{ display: 'flex', justifyContent: 'center', p: 3 }}>
+                <CircularProgress />
+              </Box>
+            )}
+          </Box>
+        </Card>
+      )}
+    </>
+  );
+
+  // Render the settings drawer
+  const renderSettingsDrawer = () => (
+    <Drawer
+      anchor="right"
+      open={settingsOpen}
+      onClose={toggleSettings}
+      sx={{ '& .MuiDrawer-paper': { width: { xs: '100%', sm: 400 } } }}
+    >
+      <Box sx={{ p: 3 }}>
+        <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 3 }}>
+          <Typography variant="h6">Settings</Typography>
+          <IconButton onClick={toggleSettings}>
+            <CloseIcon />
+          </IconButton>
+        </Box>
+        
+        <Typography variant="subtitle1" gutterBottom>
+          Document Folder
+        </Typography>
+        
+        <Box sx={{ mb: 3 }}>
+          {selectedFolder ? (
+            <Typography variant="body2" sx={{ mb: 2 }}>
+              Current folder: <strong>{selectedFolder}</strong>
             </Typography>
-            <Typography variant="body1" paragraph>
-              Click the button below to scan and index all documents in the selected folder.
+          ) : (
+            <Typography variant="body2" sx={{ mb: 2 }}>
+              No folder selected
             </Typography>
-            <Box sx={{ display: 'flex', gap: 2 }}>
-              <Button 
-                variant="outlined" 
-                startIcon={<ArrowBackIcon />}
-                onClick={resetSetup}
-              >
-                Back
-              </Button>
-              <Button 
-                variant="contained" 
-                color="primary" 
-                startIcon={isScanning ? <CircularProgress size={20} color="inherit" /> : <SearchIcon />}
-                onClick={scanDirectory}
-                disabled={isScanning || !isElectron}
-              >
-                {isScanning ? 'Indexing...' : 'Start Indexing'}
-              </Button>
+          )}
+          
+          <Button
+            variant="outlined"
+            startIcon={<FolderIcon />}
+            onClick={handleSelectFolder}
+            sx={{ mr: 2 }}
+          >
+            Change Folder
+          </Button>
+        </Box>
+        
+        <Divider sx={{ my: 3 }} />
+        
+        <Typography variant="subtitle1" gutterBottom>
+          Indexing
+        </Typography>
+        
+        <Box>
+          <Button
+            variant="contained"
+            color="primary"
+            startIcon={isScanning ? <CircularProgress size={20} color="inherit" /> : <RefreshIcon />}
+            onClick={() => scanDirectory()}
+            disabled={isScanning || !selectedFolder}
+            sx={{ mb: 2 }}
+          >
+            {isScanning ? 'Indexing...' : 'Re-Index Documents'}
+          </Button>
+          
+          {isScanning && (
+            <Box sx={{ width: '100%', mt: 2 }}>
+              <LinearProgress variant="determinate" value={progress} />
+              <Typography variant="body2" sx={{ mt: 1 }}>
+                Processing file {indexingDetails.processedFiles} of {indexingDetails.totalFiles}
+                {indexingDetails.totalFilesFound > indexingDetails.totalFiles && 
+                  ` (limited from ${indexingDetails.totalFilesFound} total files)`}
+              </Typography>
+              <Typography variant="body2" sx={{ mt: 0.5 }} noWrap>
+                {indexingDetails.currentFile}
+              </Typography>
             </Box>
-            {isScanning && (
-              <Box sx={{ width: '100%', mt: 2 }}>
-                <LinearProgress variant="determinate" value={progress} />
-                <Typography variant="body2" sx={{ mt: 1 }}>
-                  Processing file {indexingDetails.processedFiles} of {indexingDetails.totalFiles}
-                  {indexingDetails.totalFilesFound > indexingDetails.totalFiles && 
-                    ` (limited from ${indexingDetails.totalFilesFound} total files)`}
-                </Typography>
-                <Typography variant="body2" sx={{ mt: 0.5 }} noWrap>
-                  {indexingDetails.currentFile}
-                </Typography>
-              </Box>
-            )}
-            {statusMessage && (
-              <StatusText variant="body2">
-                {statusMessage}
-              </StatusText>
-            )}
-            {error && (
-              <StatusText color="error.main" variant="body2">
-                {error}
-              </StatusText>
-            )}
-          </StyledPaper>
-        );
-      
-      case 2:
-        return (
-          <>
-            <StyledPaper elevation={3}>
-              <Typography variant="h5" gutterBottom>
-                Step 3: Search Documents
-              </Typography>
-              <Typography variant="body1" paragraph>
-                Indexing complete! You can now search through your documents using natural language.
-              </Typography>
-              <Typography variant="body2" paragraph>
-                Indexed {files.length} files from {selectedFolder}
-              </Typography>
-              
-              <Box sx={{ display: 'flex', gap: 1, mb: 2 }}>
-                <TextField
-                  fullWidth
-                  label="Search Query"
-                  variant="outlined"
-                  value={searchQuery}
-                  onChange={(e) => setSearchQuery(e.target.value)}
-                  onKeyPress={(e) => e.key === 'Enter' && handleSearch()}
-                  placeholder="Enter a natural language query like 'Story about a dog and a boy'"
-                />
-                <Button
-                  variant="contained"
-                  color="primary"
-                  startIcon={isSearching ? <CircularProgress size={20} color="inherit" /> : <SearchIcon />}
-                  onClick={handleSearch}
-                  disabled={isSearching || !searchQuery.trim()}
-                >
-                  Search
-                </Button>
-              </Box>
-              
-              <Box sx={{ display: 'flex', gap: 2 }}>
-                <Button 
-                  variant="outlined" 
-                  startIcon={<ArrowBackIcon />}
-                  onClick={resetSetup}
-                >
-                  Start Over
-                </Button>
-              </Box>
-            </StyledPaper>
-            
-            {searchResults.length > 0 && (
-              <StyledPaper elevation={3}>
-                <Typography variant="h6" gutterBottom>
-                  Search Results
-                </Typography>
-                <Divider sx={{ mb: 2 }} />
-                
-                {searchResults.map((result, index) => (
-                  <SearchResult 
-                    key={index} 
-                    elevation={1} 
-                    onClick={() => handleSearchResultClick(result)}
-                    theme={theme}
-                  >
-                    <SearchResultPath theme={theme}>
-                      {result.filePath}
-                      <SearchResultScore theme={theme}>
-                        {Math.round(result.score * 100)}%
-                      </SearchResultScore>
-                    </SearchResultPath>
-                    <Typography variant="body1">
-                      {result.text.length > 300 
-                        ? result.text.substring(0, 300) + '...' 
-                        : result.text}
-                    </Typography>
-                  </SearchResult>
-                ))}
-              </StyledPaper>
-            )}
-            
-            {selectedFile && (
-              <Card sx={{ maxHeight: 600, overflow: 'auto', mt: 2 }}>
-                <Box sx={{ p: 2 }}>
-                  <Typography variant="subtitle1" noWrap>
-                    {selectedFile.split(/[\\/]/).pop()}
-                  </Typography>
-                  <Divider sx={{ my: 1 }} />
-                  {fileContent ? (
-                    <FileContent id="file-content">
-                      {fileContent.length > 10000 
-                        ? fileContent.substring(0, 10000) + '...' 
-                        : fileContent}
-                    </FileContent>
-                  ) : (
-                    <Box sx={{ display: 'flex', justifyContent: 'center', p: 3 }}>
-                      <CircularProgress />
-                    </Box>
-                  )}
-                </Box>
-              </Card>
-            )}
-          </>
-        );
-      
-      default:
-        return null;
-    }
-  };
+          )}
+        </Box>
+      </Box>
+    </Drawer>
+  );
 
   return (
     <AppContainer>
@@ -533,7 +560,7 @@ function App() {
           <Typography variant="h6" component="div" sx={{ flexGrow: 1 }}>
             HereIAm
           </Typography>
-          <IconButton color="inherit" size="large">
+          <IconButton color="inherit" size="large" onClick={toggleSettings}>
             <SettingsIcon />
           </IconButton>
         </Toolbar>
@@ -541,19 +568,11 @@ function App() {
       
       <MainContent>
         <Container maxWidth="lg">
-          <Box sx={{ mb: 4 }}>
-            <Stepper activeStep={activeStep}>
-              {steps.map((label) => (
-                <Step key={label}>
-                  <StepLabel>{label}</StepLabel>
-                </Step>
-              ))}
-            </Stepper>
-          </Box>
-          
-          {renderStepContent()}
+          {needsInitialSetup ? renderInitialSetup() : renderSearchInterface()}
         </Container>
       </MainContent>
+      
+      {renderSettingsDrawer()}
     </AppContainer>
   );
 }

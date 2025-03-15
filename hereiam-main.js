@@ -56,6 +56,11 @@ function saveWindowState(window) {
       isMaximized: window.isMaximized()
     };
     
+    // Add last indexed folder if available
+    if (global.lastIndexedFolder) {
+      state.lastIndexedFolder = global.lastIndexedFolder;
+    }
+    
     try {
       fs.writeFileSync(windowStateFile, JSON.stringify(state));
     } catch (error) {
@@ -436,6 +441,21 @@ ipcMain.handle('select-directory', async () => {
 // Handle scanning directory for files
 ipcMain.handle('scan-directory', async (event, directoryPath, fileExtensions = ['.txt', '.md', '.js', '.html', '.css', '.json']) => {
   try {
+    // Save the folder path globally
+    global.lastIndexedFolder = directoryPath;
+    
+    // Update window state with the folder path
+    try {
+      let state = {};
+      if (fs.existsSync(windowStateFile)) {
+        state = JSON.parse(fs.readFileSync(windowStateFile, 'utf8'));
+      }
+      state.lastIndexedFolder = directoryPath;
+      fs.writeFileSync(windowStateFile, JSON.stringify(state));
+    } catch (error) {
+      console.error('Error updating window state with folder path:', error);
+    }
+    
     // Scan directory for files
     const allFiles = await fileSystem.scanDirectory(directoryPath, fileExtensions);
     
@@ -532,6 +552,39 @@ ipcMain.handle('search', async (event, query) => {
     };
   } catch (error) {
     console.error('Error searching:', error);
+    return { success: false, error: error.message };
+  }
+});
+
+// Handle checking if we have indexed data
+ipcMain.handle('check-indexed-data', async () => {
+  try {
+    // If we don't have indexed chunks in memory, try to load them from disk
+    if (indexedChunks.length === 0) {
+      loadIndexedChunks();
+    }
+    
+    // Get the folder path from the window state if available
+    let folderPath = null;
+    try {
+      if (fs.existsSync(windowStateFile)) {
+        const state = JSON.parse(fs.readFileSync(windowStateFile, 'utf8'));
+        if (state.lastIndexedFolder) {
+          folderPath = state.lastIndexedFolder;
+        }
+      }
+    } catch (error) {
+      console.error('Error reading window state:', error);
+    }
+    
+    return { 
+      success: true, 
+      hasData: indexedChunks.length > 0,
+      chunksCount: indexedChunks.length,
+      folderPath
+    };
+  } catch (error) {
+    console.error('Error checking indexed data:', error);
     return { success: false, error: error.message };
   }
 }); 
