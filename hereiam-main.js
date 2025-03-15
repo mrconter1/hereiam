@@ -10,13 +10,201 @@ const readFileAsync = promisify(fs.readFile);
 const readdirAsync = promisify(fs.readdir);
 const statAsync = promisify(fs.stat);
 
+// Window state persistence
+const windowStateFile = path.join(app.getPath('userData'), 'window-state.json');
+
+function saveWindowState(window) {
+  if (!window.isMaximized() && !window.isMinimized()) {
+    const bounds = window.getBounds();
+    const state = {
+      x: bounds.x,
+      y: bounds.y,
+      width: bounds.width,
+      height: bounds.height,
+      isMaximized: window.isMaximized()
+    };
+    
+    try {
+      fs.writeFileSync(windowStateFile, JSON.stringify(state));
+    } catch (error) {
+      console.error('Failed to save window state:', error);
+    }
+  }
+}
+
+function loadWindowState() {
+  try {
+    if (fs.existsSync(windowStateFile)) {
+      return JSON.parse(fs.readFileSync(windowStateFile, 'utf8'));
+    }
+  } catch (error) {
+    console.error('Failed to load window state:', error);
+  }
+  
+  return null;
+}
+
 let mainWindow;
+let splashWindow;
+
+function createSplashWindow() {
+  splashWindow = new BrowserWindow({
+    width: 400,
+    height: 300,
+    transparent: true,
+    frame: false,
+    alwaysOnTop: true,
+    center: true,
+    skipTaskbar: true,
+    resizable: false,
+    webPreferences: {
+      nodeIntegration: false,
+      contextIsolation: true
+    }
+  });
+
+  // Load splash screen HTML
+  splashWindow.loadURL(
+    isDev
+      ? `data:text/html,
+        <html>
+          <head>
+            <style>
+              body {
+                margin: 0;
+                padding: 0;
+                font-family: Arial, sans-serif;
+                background-color: transparent;
+                display: flex;
+                justify-content: center;
+                align-items: center;
+                height: 100vh;
+                overflow: hidden;
+              }
+              .splash-container {
+                text-align: center;
+                background-color: #4a6fa5;
+                border-radius: 10px;
+                padding: 30px;
+                box-shadow: 0 4px 20px rgba(0,0,0,0.3);
+                color: white;
+              }
+              .logo {
+                font-size: 36px;
+                font-weight: bold;
+                margin-bottom: 20px;
+              }
+              .loading {
+                width: 100%;
+                height: 4px;
+                background-color: rgba(255,255,255,0.2);
+                border-radius: 2px;
+                overflow: hidden;
+                position: relative;
+              }
+              .loading-bar {
+                position: absolute;
+                width: 30%;
+                height: 100%;
+                background-color: white;
+                border-radius: 2px;
+                animation: loading 1.5s infinite ease-in-out;
+              }
+              @keyframes loading {
+                0% { left: -30%; }
+                100% { left: 100%; }
+              }
+            </style>
+          </head>
+          <body>
+            <div class="splash-container">
+              <div class="logo">HereIAm</div>
+              <p>Starting application...</p>
+              <div class="loading">
+                <div class="loading-bar"></div>
+              </div>
+            </div>
+          </body>
+        </html>
+      `
+      : `data:text/html,
+        <html>
+          <head>
+            <style>
+              body {
+                margin: 0;
+                padding: 0;
+                font-family: Arial, sans-serif;
+                background-color: transparent;
+                display: flex;
+                justify-content: center;
+                align-items: center;
+                height: 100vh;
+                overflow: hidden;
+              }
+              .splash-container {
+                text-align: center;
+                background-color: #4a6fa5;
+                border-radius: 10px;
+                padding: 30px;
+                box-shadow: 0 4px 20px rgba(0,0,0,0.3);
+                color: white;
+              }
+              .logo {
+                font-size: 36px;
+                font-weight: bold;
+                margin-bottom: 20px;
+              }
+              .loading {
+                width: 100%;
+                height: 4px;
+                background-color: rgba(255,255,255,0.2);
+                border-radius: 2px;
+                overflow: hidden;
+                position: relative;
+              }
+              .loading-bar {
+                position: absolute;
+                width: 30%;
+                height: 100%;
+                background-color: white;
+                border-radius: 2px;
+                animation: loading 1.5s infinite ease-in-out;
+              }
+              @keyframes loading {
+                0% { left: -30%; }
+                100% { left: 100%; }
+              }
+            </style>
+          </head>
+          <body>
+            <div class="splash-container">
+              <div class="logo">HereIAm</div>
+              <p>Starting application...</p>
+              <div class="loading">
+                <div class="loading-bar"></div>
+              </div>
+            </div>
+          </body>
+        </html>
+      `
+  );
+
+  splashWindow.on('closed', () => {
+    splashWindow = null;
+  });
+}
 
 function createWindow() {
+  // Load saved window state or use defaults
+  const windowState = loadWindowState();
+  
   // Create the browser window
   mainWindow = new BrowserWindow({
-    width: 1200,
-    height: 800,
+    width: windowState ? windowState.width : 1200,
+    height: windowState ? windowState.height : 800,
+    x: windowState ? windowState.x : undefined,
+    y: windowState ? windowState.y : undefined,
     minWidth: 800,
     minHeight: 600,
     backgroundColor: '#f5f7fa',
@@ -31,6 +219,11 @@ function createWindow() {
     }
   });
 
+  // Maximize the window if it was maximized before or on first run
+  if (!windowState || windowState.isMaximized) {
+    mainWindow.maximize();
+  }
+
   // Load the Vite dev server in development
   mainWindow.loadURL(
     isDev
@@ -44,8 +237,17 @@ function createWindow() {
   
   // Show window when ready to avoid flickering
   mainWindow.once('ready-to-show', () => {
+    // Close splash screen and show main window
+    if (splashWindow) {
+      splashWindow.close();
+    }
     mainWindow.show();
     mainWindow.focus();
+  });
+
+  // Save window state when closing
+  mainWindow.on('close', () => {
+    saveWindowState(mainWindow);
   });
 
   mainWindow.on('closed', () => {
@@ -140,21 +342,24 @@ function createMenu() {
 
 // When the app is ready, create the window and menu
 app.whenReady().then(() => {
-  createWindow();
-  createMenu();
-  
-  // Register shortcut for opening folders (Ctrl+O)
-  globalShortcut.register('CommandOrControl+O', async () => {
-    if (mainWindow) {
-      const result = await dialog.showOpenDialog(mainWindow, {
-        properties: ['openDirectory']
-      });
-      
-      if (!result.canceled && result.filePaths.length > 0) {
-        mainWindow.webContents.send('folder-selected', result.filePaths[0]);
+  createSplashWindow();
+  setTimeout(() => {
+    createWindow();
+    createMenu();
+    
+    // Register shortcut for opening folders (Ctrl+O)
+    globalShortcut.register('CommandOrControl+O', async () => {
+      if (mainWindow) {
+        const result = await dialog.showOpenDialog(mainWindow, {
+          properties: ['openDirectory']
+        });
+        
+        if (!result.canceled && result.filePaths.length > 0) {
+          mainWindow.webContents.send('folder-selected', result.filePaths[0]);
+        }
       }
-    }
-  });
+    });
+  }, 1000); // Delay main window creation to show splash screen for at least 1 second
 });
 
 // Unregister shortcuts when app is quitting
