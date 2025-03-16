@@ -46,26 +46,28 @@ function saveIndexedChunks() {
 }
 
 function saveWindowState(window) {
+  const state = {
+    isMaximized: window.isMaximized()
+  };
+  
+  // Only save position and size if not maximized
   if (!window.isMaximized() && !window.isMinimized()) {
     const bounds = window.getBounds();
-    const state = {
-      x: bounds.x,
-      y: bounds.y,
-      width: bounds.width,
-      height: bounds.height,
-      isMaximized: window.isMaximized()
-    };
-    
-    // Add last indexed folder if available
-    if (global.lastIndexedFolder) {
-      state.lastIndexedFolder = global.lastIndexedFolder;
-    }
-    
-    try {
-      fs.writeFileSync(windowStateFile, JSON.stringify(state));
-    } catch (error) {
-      console.error('Failed to save window state:', error);
-    }
+    state.x = bounds.x;
+    state.y = bounds.y;
+    state.width = bounds.width;
+    state.height = bounds.height;
+  }
+  
+  // Add last indexed folder if available
+  if (global.lastIndexedFolder) {
+    state.lastIndexedFolder = global.lastIndexedFolder;
+  }
+  
+  try {
+    fs.writeFileSync(windowStateFile, JSON.stringify(state));
+  } catch (error) {
+    console.error('Failed to save window state:', error);
   }
 }
 
@@ -256,10 +258,8 @@ function createWindow() {
     }
   });
 
-  // Maximize the window if it was maximized before or on first run
-  if (!windowState || windowState.isMaximized) {
-    mainWindow.maximize();
-  }
+  // Always maximize the window on startup
+  mainWindow.maximize();
 
   // Load the Vite dev server in development
   mainWindow.loadURL(
