@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import styled from '@emotion/styled';
 import {
   AppBar,
@@ -78,6 +78,7 @@ const SearchResult = styled(Paper)`
   &:hover {
     box-shadow: 0 4px 8px rgba(0, 0, 0, 0.1);
     transform: translateY(-2px);
+    background-color: ${props => props.theme.palette.action.hover};
   }
 `;
 
@@ -114,6 +115,53 @@ const SearchBox = styled(Box)`
   margin-bottom: 24px;
 `;
 
+const HighlightedText = styled.span`
+  background-color: ${props => props.theme.palette.warning.light};
+  padding: 2px 4px;
+  border-radius: 2px;
+  font-weight: 600;
+  box-shadow: 0 0 4px rgba(255, 152, 0, 0.3);
+`;
+
+const HighlightContainer = styled.div`
+  padding: 8px;
+  border: 1px solid ${props => props.theme.palette.warning.main};
+  border-radius: 4px;
+  background-color: rgba(255, 152, 0, 0.05);
+  margin: 16px 0;
+`;
+
+const DocumentViewerContainer = styled.div`
+  position: relative;
+  height: 100%;
+`;
+
+const DocumentContent = styled.pre`
+  white-space: pre-wrap;
+  font-family: monospace;
+  font-size: 14px;
+  padding: 16px;
+  background-color: #f5f5f5;
+  border-radius: 4px;
+  overflow: auto;
+  height: calc(100vh - 200px);
+`;
+
+const BackButton = styled(Button)`
+  margin-bottom: 16px;
+`;
+
+const DocumentViewerHeader = styled(Box)`
+  display: flex;
+  align-items: center;
+  margin-bottom: 16px;
+`;
+
+const DocumentTitle = styled(Typography)`
+  margin-left: 12px;
+  font-weight: 500;
+`;
+
 function App() {
   const theme = useTheme();
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -138,8 +186,8 @@ function App() {
   });
   const [indexingGranularityLevels, setIndexingGranularityLevels] = useState({
     paragraph: true,
-    page: false,
-    document: false
+    page: true,
+    document: true
   });
   const [indexingDetails, setIndexingDetails] = useState({
     currentFile: '',
@@ -147,6 +195,10 @@ function App() {
     totalFiles: 0,
     totalFilesFound: 0
   });
+  const [viewMode, setViewMode] = useState('search'); // 'search' or 'document'
+  const [selectedResult, setSelectedResult] = useState(null);
+  const documentContentRef = useRef(null);
+  const [isLoadingDocument, setIsLoadingDocument] = useState(false);
 
   // Check if running in Electron on component mount
   useEffect(() => {
@@ -338,50 +390,48 @@ function App() {
   const handleSearchResultClick = async (result) => {
     try {
       setSelectedFile(result.filePath);
-      setStatusMessage('Loading file...');
+      setSelectedResult(result);
+      setStatusMessage('Loading document...');
       setError(null);
+      setIsLoadingDocument(true);
+      setViewMode('document');
       
       const fileResult = await window.electron.readFile(result.filePath);
       
       if (fileResult.success) {
         setFileContent(fileResult.content);
-        
-        // Scroll to the relevant part of the file
-        setTimeout(() => {
-          const fileContentElement = document.getElementById('file-content');
-          if (fileContentElement) {
-            // Create a temporary element to measure text height
-            const tempElement = document.createElement('div');
-            tempElement.style.fontFamily = 'monospace';
-            tempElement.style.fontSize = '14px';
-            tempElement.style.position = 'absolute';
-            tempElement.style.visibility = 'hidden';
-            tempElement.style.whiteSpace = 'pre-wrap';
-            tempElement.style.width = fileContentElement.clientWidth + 'px';
-            tempElement.textContent = fileResult.content.substring(0, result.startPos);
-            document.body.appendChild(tempElement);
-            
-            // Calculate scroll position
-            const scrollPosition = tempElement.clientHeight;
-            fileContentElement.scrollTop = scrollPosition;
-            
-            // Clean up
-            document.body.removeChild(tempElement);
-          }
-        }, 100);
-        
-        setStatusMessage('File loaded successfully');
+        setStatusMessage('Document loaded successfully');
       } else {
         setFileContent('');
         setError('Error reading file: ' + fileResult.error);
         setStatusMessage('Error reading file: ' + fileResult.error);
       }
+      
+      setIsLoadingDocument(false);
     } catch (error) {
       console.error('Error reading file:', error);
       setError(`Error reading file: ${error.message}`);
       setStatusMessage('Error reading file: ' + error.message);
+      setIsLoadingDocument(false);
     }
   };
+
+  const handleBackToSearch = () => {
+    setViewMode('search');
+  };
+
+  // Effect to scroll to highlighted text when document is loaded
+  useEffect(() => {
+    if (viewMode === 'document' && documentContentRef.current && selectedResult) {
+      setTimeout(() => {
+        // Find the highlight element
+        const highlightElement = document.getElementById('search-result-highlight');
+        if (highlightElement) {
+          highlightElement.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        }
+      }, 100);
+    }
+  }, [viewMode, fileContent, selectedResult]);
 
   const toggleSettings = () => {
     setSettingsOpen(!settingsOpen);
@@ -536,30 +586,76 @@ function App() {
           ))}
         </StyledPaper>
       )}
-      
-      {selectedFile && (
-        <Card sx={{ maxHeight: 600, overflow: 'auto', mt: 2 }}>
-          <Box sx={{ p: 2 }}>
-            <Typography variant="subtitle1" noWrap>
-              {selectedFile.split(/[\\/]/).pop()}
-            </Typography>
-            <Divider sx={{ my: 1 }} />
-            {fileContent ? (
-              <FileContent id="file-content">
-                {fileContent.length > 10000 
-                  ? fileContent.substring(0, 10000) + '...' 
-                  : fileContent}
-              </FileContent>
-            ) : (
-              <Box sx={{ display: 'flex', justifyContent: 'center', p: 3 }}>
-                <CircularProgress />
-              </Box>
-            )}
-          </Box>
-        </Card>
-      )}
     </>
   );
+
+  // Render document viewer
+  const renderDocumentViewer = () => {
+    if (!selectedFile) return null;
+    
+    const fileName = selectedFile.split(/[\\/]/).pop();
+    
+    return (
+      <DocumentViewerContainer>
+        <BackButton 
+          variant="contained" 
+          startIcon={<ArrowBackIcon />}
+          onClick={handleBackToSearch}
+          color="primary"
+        >
+          Back to Search Results
+        </BackButton>
+        
+        <Paper elevation={3} sx={{ p: 2 }}>
+          <DocumentViewerHeader>
+            <DescriptionIcon color="primary" />
+            <DocumentTitle variant="h6">
+              {fileName}
+            </DocumentTitle>
+          </DocumentViewerHeader>
+          <Divider sx={{ mb: 2 }} />
+          
+          {isLoadingDocument ? (
+            <Box sx={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '400px' }}>
+              <CircularProgress />
+              <Typography variant="body1" sx={{ ml: 2 }}>
+                Loading document...
+              </Typography>
+            </Box>
+          ) : fileContent ? (
+            <DocumentContent ref={documentContentRef}>
+              {selectedResult && selectedResult.startPos !== undefined ? (
+                // Calculate the end position based on the text length
+                (() => {
+                  const endPos = selectedResult.startPos + selectedResult.text.length;
+                  
+                  return (
+                    <>
+                      {fileContent.substring(0, selectedResult.startPos)}
+                      <HighlightContainer theme={theme} id="search-result-highlight">
+                        <HighlightedText theme={theme}>
+                          {fileContent.substring(selectedResult.startPos, endPos)}
+                        </HighlightedText>
+                      </HighlightContainer>
+                      {fileContent.substring(endPos)}
+                    </>
+                  );
+                })()
+              ) : (
+                fileContent
+              )}
+            </DocumentContent>
+          ) : (
+            <Box sx={{ display: 'flex', justifyContent: 'center', p: 3 }}>
+              <Typography variant="body1" color="error">
+                Error loading document content
+              </Typography>
+            </Box>
+          )}
+        </Paper>
+      </DocumentViewerContainer>
+    );
+  };
 
   // Render the settings drawer
   const renderSettingsDrawer = () => (
@@ -700,7 +796,11 @@ function App() {
       
       <MainContent>
         <Container maxWidth="lg">
-          {needsInitialSetup ? renderInitialSetup() : renderSearchInterface()}
+          {needsInitialSetup 
+            ? renderInitialSetup() 
+            : viewMode === 'search' 
+              ? renderSearchInterface() 
+              : renderDocumentViewer()}
         </Container>
       </MainContent>
       
