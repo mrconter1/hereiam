@@ -97,6 +97,17 @@ const SearchResultScore = styled.span`
   margin-left: 8px;
 `;
 
+const GranularityBadge = styled.span`
+  display: inline-block;
+  padding: 2px 6px;
+  border-radius: 4px;
+  background-color: ${props => props.theme.palette.secondary.main};
+  color: white;
+  font-size: 12px;
+  margin-left: 8px;
+  text-transform: capitalize;
+`;
+
 const SearchBox = styled(Box)`
   display: flex;
   gap: 16px;
@@ -512,6 +523,9 @@ function App() {
                 <SearchResultScore theme={theme}>
                   {Math.round(result.score * 100)}%
                 </SearchResultScore>
+                <GranularityBadge theme={theme}>
+                  {result.granularity || 'paragraph'}
+                </GranularityBadge>
               </SearchResultPath>
               <Typography variant="body1">
                 {result.text.length > 300 
