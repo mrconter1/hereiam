@@ -460,9 +460,9 @@ ipcMain.handle('scan-directory', async (event, directoryPath, fileExtensions = [
     // Scan directory for files
     const allFiles = await fileSystem.scanDirectory(directoryPath, fileExtensions);
     
-    // DEV LIMIT: Only process the first 250 files
-    const files = isDev ? allFiles.slice(0, 250) : allFiles;
-    console.log(`Found ${allFiles.length} files, processing ${files.length} files (dev limit: ${isDev})`);
+    // DEV LIMIT: Only process the first 50 files to keep development iterations fast
+    const files = isDev ? allFiles.slice(0, 50) : allFiles;
+    console.log(`Found ${allFiles.length} files, processing ${files.length} files (dev limit: ${isDev ? 'yes, 50 files' : 'no'})`);
     
     // Clear existing indexed chunks
     indexedChunks = [];
@@ -481,7 +481,7 @@ ipcMain.handle('scan-directory', async (event, directoryPath, fileExtensions = [
       const batchChunks = [];
       for (const filePath of batch) {
         try {
-          // Extract chunks at different granularity levels
+          // Extract chunks at different granularity levels with no limits
           if (granularityLevels.paragraph) {
             const paragraphChunks = await fileSystem.extractTextChunks(filePath, 1000, 'paragraph');
             batchChunks.push(...paragraphChunks);

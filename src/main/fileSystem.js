@@ -199,9 +199,8 @@ async function getChunksByEmbeddingIds(embeddingIds) {
       `SELECT c.id, c.text, c.start_position, c.granularity, c.embedding_id, d.path 
        FROM chunks c
        JOIN documents d ON c.document_id = d.id
-       WHERE c.embedding_id IN (${placeholders})
-       ORDER BY FIELD(c.embedding_id, ${placeholders})`,
-      [...embeddingIds, ...embeddingIds],
+       WHERE c.embedding_id IN (${placeholders})`,
+      embeddingIds,
       (err, rows) => {
         if (err) {
           reject(err);
@@ -214,6 +213,12 @@ async function getChunksByEmbeddingIds(embeddingIds) {
             granularity: row.granularity,
             embeddingId: row.embedding_id
           }));
+          
+          // Sort chunks to match the order of embeddingIds
+          chunks.sort((a, b) => {
+            return embeddingIds.indexOf(a.embeddingId) - embeddingIds.indexOf(b.embeddingId);
+          });
+          
           resolve(chunks);
         }
       }
@@ -402,11 +407,6 @@ function chunkText(text, maxChunkSize = 1000) {
  * @returns {Promise<Array<{text: string, filePath: string, startPos: number, granularity: string}>>} - Array of text chunks
  */
 async function extractTextChunks(filePath, chunkSize = 1000, granularity = 'paragraph') {
-  // For development, use larger chunks and limit the number of chunks per file
-  const isDev = process.env.NODE_ENV === 'development';
-  const devChunkSize = 2000; // Larger chunks in dev mode
-  const maxChunksPerFile = isDev ? 10 : Infinity; // Limit chunks per file in dev mode
-  
   // If granularity is document, use the entire file as one chunk
   if (granularity === 'document') {
     const content = await readTextFile(filePath);
@@ -415,22 +415,17 @@ async function extractTextChunks(filePath, chunkSize = 1000, granularity = 'para
       filePath,
       startPos: 0,
       granularity: 'document'
-    }].slice(0, maxChunksPerFile);
+    }];
   }
   
-  // Otherwise, use the specified chunk size
-  const actualChunkSize = isDev && granularity === 'paragraph' ? devChunkSize : chunkSize;
-  
+  // Use the specified chunk size without any dev mode modifications
   const content = await readTextFile(filePath);
-  const textChunks = chunkText(content, actualChunkSize);
-  
-  // Limit the number of chunks per file in dev mode
-  const limitedChunks = textChunks.slice(0, maxChunksPerFile);
+  const textChunks = chunkText(content, chunkSize);
   
   const chunks = [];
   let startPos = 0;
   
-  for (const text of limitedChunks) {
+  for (const text of textChunks) {
     chunks.push({
       text,
       filePath,
@@ -442,9 +437,7 @@ async function extractTextChunks(filePath, chunkSize = 1000, granularity = 'para
     startPos += text.length;
   }
   
-  if (isDev && textChunks.length > maxChunksPerFile) {
-    console.log(`Dev mode: Limited ${filePath} from ${textChunks.length} to ${maxChunksPerFile} chunks`);
-  }
+  console.log(`Extracted ${chunks.length} ${granularity} chunks from ${filePath}`);
   
   return chunks;
 }
