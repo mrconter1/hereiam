@@ -2,13 +2,268 @@ const fs = require('fs');
 const path = require('path');
 const { promisify } = require('util');
 const { spawn } = require('child_process');
+const sqlite3 = require('sqlite3').verbose();
 
 // Convert callback-based fs methods to Promise-based
 const readFileAsync = promisify(fs.readFile);
 const readdirAsync = promisify(fs.readdir);
 const statAsync = promisify(fs.stat);
 
-// Check if Python is installed and install required packages if needed
+// Database setup
+let db;
+const dbPath = path.join(process.env.APPDATA || process.env.HOME || process.env.USERPROFILE, 'hereiam', 'hereiam.db');
+
+/**
+ * Initialize the SQLite database
+ */
+async function initDatabase() {
+  // Ensure directory exists
+  const dbDir = path.dirname(dbPath);
+  if (!fs.existsSync(dbDir)) {
+    fs.mkdirSync(dbDir, { recursive: true });
+  }
+  
+  return new Promise((resolve, reject) => {
+    db = new sqlite3.Database(dbPath, (err) => {
+      if (err) {
+        console.error('Error opening database:', err);
+        reject(err);
+        return;
+      }
+      
+      // Create tables if they don't exist
+      db.serialize(() => {
+        // Documents table
+        db.run(`CREATE TABLE IF NOT EXISTS documents (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          path TEXT UNIQUE,
+          title TEXT,
+          last_indexed DATETIME
+        )`);
+        
+        // Chunks table
+        db.run(`CREATE TABLE IF NOT EXISTS chunks (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          document_id INTEGER,
+          text TEXT,
+          start_position INTEGER,
+          granularity TEXT,
+          embedding_id INTEGER,
+          FOREIGN KEY (document_id) REFERENCES documents(id)
+        )`, (err) => {
+          if (err) {
+            console.error('Error creating tables:', err);
+            reject(err);
+          } else {
+            console.log('Database initialized successfully');
+            resolve();
+          }
+        });
+      });
+    });
+  });
+}
+
+/**
+ * Close the database connection
+ */
+function closeDatabase() {
+  if (db) {
+    db.close((err) => {
+      if (err) {
+        console.error('Error closing database:', err);
+      } else {
+        console.log('Database connection closed');
+      }
+    });
+  }
+}
+
+/**
+ * Get or create a document record
+ * @param {string} filePath - Path to the document
+ * @returns {Promise<number>} - Document ID
+ */
+async function getOrCreateDocument(filePath) {
+  return new Promise((resolve, reject) => {
+    const title = path.basename(filePath);
+    const now = new Date().toISOString();
+    
+    db.get('SELECT id FROM documents WHERE path = ?', [filePath], (err, row) => {
+      if (err) {
+        reject(err);
+        return;
+      }
+      
+      if (row) {
+        // Update last_indexed timestamp
+        db.run('UPDATE documents SET last_indexed = ? WHERE id = ?', [now, row.id], (err) => {
+          if (err) {
+            reject(err);
+          } else {
+            resolve(row.id);
+          }
+        });
+      } else {
+        // Insert new document
+        db.run('INSERT INTO documents (path, title, last_indexed) VALUES (?, ?, ?)', 
+          [filePath, title, now], 
+          function(err) {
+            if (err) {
+              reject(err);
+            } else {
+              resolve(this.lastID);
+            }
+          }
+        );
+      }
+    });
+  });
+}
+
+/**
+ * Store chunks in the database
+ * @param {Array<{text: string, filePath: string, startPos: number, granularity: string, embedding: Array<number>}>} chunks - Chunks with embeddings
+ * @returns {Promise<Array<{id: number, text: string, filePath: string, startPos: number, granularity: string, embedding: Array<number>}>>} - Chunks with IDs
+ */
+async function storeChunks(chunks) {
+  // Group chunks by file path
+  const chunksByFile = {};
+  for (const chunk of chunks) {
+    if (!chunksByFile[chunk.filePath]) {
+      chunksByFile[chunk.filePath] = [];
+    }
+    chunksByFile[chunk.filePath].push(chunk);
+  }
+  
+  const chunksWithIds = [];
+  
+  // Process each file's chunks
+  for (const filePath of Object.keys(chunksByFile)) {
+    const documentId = await getOrCreateDocument(filePath);
+    const fileChunks = chunksByFile[filePath];
+    
+    // Clear existing chunks for this document
+    await new Promise((resolve, reject) => {
+      db.run('DELETE FROM chunks WHERE document_id = ?', [documentId], (err) => {
+        if (err) {
+          reject(err);
+        } else {
+          resolve();
+        }
+      });
+    });
+    
+    // Insert new chunks
+    for (let i = 0; i < fileChunks.length; i++) {
+      const chunk = fileChunks[i];
+      const embeddingId = i; // This will match the position in the FAISS index
+      
+      const chunkWithId = await new Promise((resolve, reject) => {
+        db.run(
+          'INSERT INTO chunks (document_id, text, start_position, granularity, embedding_id) VALUES (?, ?, ?, ?, ?)',
+          [documentId, chunk.text, chunk.startPos, chunk.granularity, embeddingId],
+          function(err) {
+            if (err) {
+              reject(err);
+            } else {
+              resolve({
+                ...chunk,
+                id: this.lastID,
+                embeddingId
+              });
+            }
+          }
+        );
+      });
+      
+      chunksWithIds.push(chunkWithId);
+    }
+  }
+  
+  return chunksWithIds;
+}
+
+/**
+ * Get chunks by embedding IDs
+ * @param {Array<number>} embeddingIds - Array of embedding IDs
+ * @returns {Promise<Array<{id: number, text: string, filePath: string, startPos: number, granularity: string, embeddingId: number}>>} - Chunks
+ */
+async function getChunksByEmbeddingIds(embeddingIds) {
+  if (embeddingIds.length === 0) return [];
+  
+  const placeholders = embeddingIds.map(() => '?').join(',');
+  
+  return new Promise((resolve, reject) => {
+    db.all(
+      `SELECT c.id, c.text, c.start_position, c.granularity, c.embedding_id, d.path 
+       FROM chunks c
+       JOIN documents d ON c.document_id = d.id
+       WHERE c.embedding_id IN (${placeholders})
+       ORDER BY FIELD(c.embedding_id, ${placeholders})`,
+      [...embeddingIds, ...embeddingIds],
+      (err, rows) => {
+        if (err) {
+          reject(err);
+        } else {
+          const chunks = rows.map(row => ({
+            id: row.id,
+            text: row.text,
+            filePath: row.path,
+            startPos: row.start_position,
+            granularity: row.granularity,
+            embeddingId: row.embedding_id
+          }));
+          resolve(chunks);
+        }
+      }
+    );
+  });
+}
+
+/**
+ * Get chunks by granularity levels
+ * @param {Object} granularityLevels - Object with granularity levels as keys and boolean values
+ * @returns {Promise<Array<{id: number, text: string, filePath: string, startPos: number, granularity: string, embeddingId: number}>>} - Chunks
+ */
+async function getChunksByGranularity(granularityLevels) {
+  const levels = Object.entries(granularityLevels)
+    .filter(([_, value]) => value)
+    .map(([key, _]) => key);
+  
+  if (levels.length === 0) return [];
+  
+  const placeholders = levels.map(() => '?').join(',');
+  
+  return new Promise((resolve, reject) => {
+    db.all(
+      `SELECT c.id, c.text, c.start_position, c.granularity, c.embedding_id, d.path 
+       FROM chunks c
+       JOIN documents d ON c.document_id = d.id
+       WHERE c.granularity IN (${placeholders})`,
+      levels,
+      (err, rows) => {
+        if (err) {
+          reject(err);
+        } else {
+          const chunks = rows.map(row => ({
+            id: row.id,
+            text: row.text,
+            filePath: row.path,
+            startPos: row.start_position,
+            granularity: row.granularity,
+            embeddingId: row.embedding_id
+          }));
+          resolve(chunks);
+        }
+      }
+    );
+  });
+}
+
+/**
+ * Check if Python is installed and install required packages if needed
+ */
 async function setupPythonEnvironment() {
   return new Promise((resolve, reject) => {
     const pip = spawn('pip', ['install', 'sentence-transformers', 'numpy', 'scikit-learn', 'faiss-cpu', '--user']);
@@ -24,7 +279,11 @@ async function setupPythonEnvironment() {
     pip.on('close', (code) => {
       if (code === 0) {
         console.log('Python dependencies installed successfully');
-        resolve(true);
+        
+        // Initialize database after Python setup
+        initDatabase()
+          .then(() => resolve(true))
+          .catch(err => reject(err));
       } else {
         console.error(`pip process exited with code ${code}`);
         reject(new Error(`Failed to install Python dependencies, exit code: ${code}`));
@@ -138,16 +397,29 @@ function chunkText(text, maxChunkSize = 1000) {
 /**
  * Extracts text chunks from a file
  * @param {string} filePath - Path to the file
- * @param {number} chunkSize - Maximum size of each chunk in characters
- * @returns {Promise<Array<{text: string, filePath: string, startPos: number}>>} - Array of text chunks
+ * @param {number} chunkSize - Maximum size of each chunk in characters (0 for entire document)
+ * @param {string} granularity - Granularity level ('paragraph', 'page', 'document')
+ * @returns {Promise<Array<{text: string, filePath: string, startPos: number, granularity: string}>>} - Array of text chunks
  */
-async function extractTextChunks(filePath, chunkSize = 1000) {
+async function extractTextChunks(filePath, chunkSize = 1000, granularity = 'paragraph') {
   // For development, use larger chunks and limit the number of chunks per file
   const isDev = process.env.NODE_ENV === 'development';
   const devChunkSize = 2000; // Larger chunks in dev mode
   const maxChunksPerFile = isDev ? 10 : Infinity; // Limit chunks per file in dev mode
   
-  const actualChunkSize = isDev ? devChunkSize : chunkSize;
+  // If granularity is document, use the entire file as one chunk
+  if (granularity === 'document') {
+    const content = await readTextFile(filePath);
+    return [{
+      text: content,
+      filePath,
+      startPos: 0,
+      granularity: 'document'
+    }].slice(0, maxChunksPerFile);
+  }
+  
+  // Otherwise, use the specified chunk size
+  const actualChunkSize = isDev && granularity === 'paragraph' ? devChunkSize : chunkSize;
   
   const content = await readTextFile(filePath);
   const textChunks = chunkText(content, actualChunkSize);
@@ -162,7 +434,8 @@ async function extractTextChunks(filePath, chunkSize = 1000) {
     chunks.push({
       text,
       filePath,
-      startPos
+      startPos,
+      granularity
     });
     
     // Update the start position for the next chunk
@@ -348,18 +621,43 @@ with open('${tempFilePath.replace(/\\/g, '\\\\')}.results', 'w', encoding='utf-8
           const resultsJson = fs.readFileSync(`${tempFilePath}.results`, 'utf8');
           const results = JSON.parse(resultsJson);
           
-          // Map results to chunks
-          const searchResults = results.map(result => ({
-            ...chunks[result.index],
-            score: result.score
-          }));
+          // Get embedding IDs from results
+          const embeddingIds = results.map(result => result.index);
           
-          // Clean up temporary files
-          fs.unlinkSync(tempFilePath);
-          fs.unlinkSync(`${tempFilePath}.results`);
-          fs.unlinkSync(scriptPath);
-          
-          resolve(searchResults);
+          // Get chunks from database by embedding IDs
+          getChunksByEmbeddingIds(embeddingIds)
+            .then(dbChunks => {
+              // Map results to chunks from database
+              const searchResults = results.map((result, i) => {
+                const chunk = dbChunks.find(c => c.embeddingId === result.index) || chunks[result.index];
+                return {
+                  ...chunk,
+                  score: result.score
+                };
+              });
+              
+              // Clean up temporary files
+              fs.unlinkSync(tempFilePath);
+              fs.unlinkSync(`${tempFilePath}.results`);
+              fs.unlinkSync(scriptPath);
+              
+              resolve(searchResults);
+            })
+            .catch(error => {
+              // Fallback to using in-memory chunks if database query fails
+              console.error('Error getting chunks from database:', error);
+              const searchResults = results.map(result => ({
+                ...chunks[result.index],
+                score: result.score
+              }));
+              
+              // Clean up temporary files
+              fs.unlinkSync(tempFilePath);
+              fs.unlinkSync(`${tempFilePath}.results`);
+              fs.unlinkSync(scriptPath);
+              
+              resolve(searchResults);
+            });
         } catch (error) {
           reject(error);
         }
@@ -376,6 +674,15 @@ with open('${tempFilePath.replace(/\\/g, '\\\\')}.results', 'w', encoding='utf-8
  * @returns {Promise<boolean>} - Success status
  */
 async function createFaissIndex(chunks) {
+  // First store chunks in the database
+  try {
+    const chunksWithIds = await storeChunks(chunks);
+    console.log(`Stored ${chunksWithIds.length} chunks in the database`);
+  } catch (error) {
+    console.error('Error storing chunks in database:', error);
+    // Continue with FAISS index creation even if database storage fails
+  }
+  
   // Create a temporary file to store the chunk embeddings
   const chunksEmbeddingsPath = path.join(__dirname, 'temp_chunks_embeddings.json');
   fs.writeFileSync(chunksEmbeddingsPath, JSON.stringify(chunks.map(c => c.embedding)));
@@ -452,5 +759,10 @@ module.exports = {
   extractTextChunks,
   generateEmbeddings,
   searchChunks,
-  createFaissIndex
+  createFaissIndex,
+  initDatabase,
+  closeDatabase,
+  storeChunks,
+  getChunksByEmbeddingIds,
+  getChunksByGranularity
 }; 

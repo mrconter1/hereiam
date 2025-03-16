@@ -5,9 +5,12 @@ import {
   Box,
   Button,
   Card,
+  Checkbox,
   CircularProgress,
   Container,
   Divider,
+  FormControlLabel,
+  FormGroup,
   IconButton,
   LinearProgress,
   List,
@@ -117,6 +120,16 @@ function App() {
   const [isSearching, setIsSearching] = useState(false);
   const [hasIndexedData, setHasIndexedData] = useState(false);
   const [needsInitialSetup, setNeedsInitialSetup] = useState(true);
+  const [granularityLevels, setGranularityLevels] = useState({
+    paragraph: true,
+    page: false,
+    document: false
+  });
+  const [indexingGranularityLevels, setIndexingGranularityLevels] = useState({
+    paragraph: true,
+    page: false,
+    document: false
+  });
   const [indexingDetails, setIndexingDetails] = useState({
     currentFile: '',
     processedFiles: 0,
@@ -212,13 +225,21 @@ function App() {
   const scanDirectory = async (folderToScan = selectedFolder) => {
     if (!folderToScan) return;
     
+    // Ensure at least one granularity level is selected
+    if (!indexingGranularityLevels.paragraph && 
+        !indexingGranularityLevels.page && 
+        !indexingGranularityLevels.document) {
+      setError('Please select at least one granularity level for indexing');
+      return;
+    }
+    
     try {
       setIsScanning(true);
       setProgress(0);
       setStatusMessage('Scanning directory...');
       setError(null);
       
-      const result = await window.electron.scanDirectory(folderToScan);
+      const result = await window.electron.scanDirectory(folderToScan, undefined, indexingGranularityLevels);
       
       if (result.success) {
         setFiles(result.files);
@@ -272,12 +293,18 @@ function App() {
   const handleSearch = async () => {
     if (!searchQuery.trim()) return;
     
+    // Ensure at least one granularity level is selected
+    if (!granularityLevels.paragraph && !granularityLevels.page && !granularityLevels.document) {
+      setError('Please select at least one granularity level for search');
+      return;
+    }
+    
     try {
       setIsSearching(true);
       setStatusMessage('Searching...');
       setError(null);
       
-      const result = await window.electron.search(searchQuery);
+      const result = await window.electron.search(searchQuery, granularityLevels);
       
       if (result.success) {
         setSearchResults(result.results);
@@ -409,6 +436,50 @@ function App() {
           </Button>
         </SearchBox>
         
+        <Box sx={{ mt: 2, mb: 1 }}>
+          <Typography variant="subtitle2" gutterBottom>
+            Granularity Level:
+          </Typography>
+          <FormGroup row>
+            <FormControlLabel
+              control={
+                <Checkbox
+                  checked={granularityLevels.paragraph}
+                  onChange={(e) => setGranularityLevels({
+                    ...granularityLevels,
+                    paragraph: e.target.checked
+                  })}
+                />
+              }
+              label="Paragraph"
+            />
+            <FormControlLabel
+              control={
+                <Checkbox
+                  checked={granularityLevels.page}
+                  onChange={(e) => setGranularityLevels({
+                    ...granularityLevels,
+                    page: e.target.checked
+                  })}
+                />
+              }
+              label="Page"
+            />
+            <FormControlLabel
+              control={
+                <Checkbox
+                  checked={granularityLevels.document}
+                  onChange={(e) => setGranularityLevels({
+                    ...granularityLevels,
+                    document: e.target.checked
+                  })}
+                />
+              }
+              label="Document"
+            />
+          </FormGroup>
+        </Box>
+        
         {statusMessage && (
           <StatusText variant="body2">
             {statusMessage}
@@ -523,13 +594,60 @@ function App() {
           Indexing
         </Typography>
         
+        <Box sx={{ mb: 3 }}>
+          <Typography variant="subtitle2" gutterBottom>
+            Granularity Levels to Index:
+          </Typography>
+          <FormGroup>
+            <FormControlLabel
+              control={
+                <Checkbox
+                  checked={indexingGranularityLevels.paragraph}
+                  onChange={(e) => setIndexingGranularityLevels({
+                    ...indexingGranularityLevels,
+                    paragraph: e.target.checked
+                  })}
+                />
+              }
+              label="Paragraph (smaller chunks, more precise results)"
+            />
+            <FormControlLabel
+              control={
+                <Checkbox
+                  checked={indexingGranularityLevels.page}
+                  onChange={(e) => setIndexingGranularityLevels({
+                    ...indexingGranularityLevels,
+                    page: e.target.checked
+                  })}
+                />
+              }
+              label="Page (medium chunks, balanced context)"
+            />
+            <FormControlLabel
+              control={
+                <Checkbox
+                  checked={indexingGranularityLevels.document}
+                  onChange={(e) => setIndexingGranularityLevels({
+                    ...indexingGranularityLevels,
+                    document: e.target.checked
+                  })}
+                />
+              }
+              label="Document (entire documents, maximum context)"
+            />
+          </FormGroup>
+        </Box>
+        
         <Box>
           <Button
             variant="contained"
             color="primary"
             startIcon={isScanning ? <CircularProgress size={20} color="inherit" /> : <RefreshIcon />}
             onClick={() => scanDirectory()}
-            disabled={isScanning || !selectedFolder}
+            disabled={isScanning || !selectedFolder || 
+              (!indexingGranularityLevels.paragraph && 
+               !indexingGranularityLevels.page && 
+               !indexingGranularityLevels.document)}
             sx={{ mb: 2 }}
           >
             {isScanning ? 'Indexing...' : 'Re-Index Documents'}

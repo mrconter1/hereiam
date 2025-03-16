@@ -382,7 +382,7 @@ app.whenReady().then(async () => {
   // Load indexed chunks if available
   loadIndexedChunks();
   
-  // Setup Python environment
+  // Setup Python environment and initialize database
   try {
     await fileSystem.setupPythonEnvironment();
   } catch (error) {
@@ -410,9 +410,10 @@ app.whenReady().then(async () => {
   }, 1000); // Delay main window creation to show splash screen for at least 1 second
 });
 
-// Unregister shortcuts when app is quitting
+// Unregister shortcuts and close database when app is quitting
 app.on('will-quit', () => {
   globalShortcut.unregisterAll();
+  fileSystem.closeDatabase();
 });
 
 // Quit when all windows are closed, except on macOS
@@ -439,7 +440,7 @@ ipcMain.handle('select-directory', async () => {
 });
 
 // Handle scanning directory for files
-ipcMain.handle('scan-directory', async (event, directoryPath, fileExtensions = ['.txt', '.md', '.js', '.html', '.css', '.json']) => {
+ipcMain.handle('scan-directory', async (event, directoryPath, fileExtensions = ['.txt', '.md', '.js', '.html', '.css', '.json'], granularityLevels = { paragraph: true }) => {
   try {
     // Save the folder path globally
     global.lastIndexedFolder = directoryPath;
@@ -472,6 +473,7 @@ ipcMain.handle('scan-directory', async (event, directoryPath, fileExtensions = [
     
     // Process files in batches to avoid memory issues
     const batchSize = 5;
+    
     for (let i = 0; i < totalFiles; i += batchSize) {
       const batch = files.slice(i, i + batchSize);
       
@@ -479,8 +481,21 @@ ipcMain.handle('scan-directory', async (event, directoryPath, fileExtensions = [
       const batchChunks = [];
       for (const filePath of batch) {
         try {
-          const chunks = await fileSystem.extractTextChunks(filePath);
-          batchChunks.push(...chunks);
+          // Extract chunks at different granularity levels
+          if (granularityLevels.paragraph) {
+            const paragraphChunks = await fileSystem.extractTextChunks(filePath, 1000, 'paragraph');
+            batchChunks.push(...paragraphChunks);
+          }
+          
+          if (granularityLevels.page) {
+            const pageChunks = await fileSystem.extractTextChunks(filePath, 4000, 'page');
+            batchChunks.push(...pageChunks);
+          }
+          
+          if (granularityLevels.document) {
+            const documentChunks = await fileSystem.extractTextChunks(filePath, 0, 'document');
+            batchChunks.push(...documentChunks);
+          }
           
           // Update progress
           processedFiles++;
@@ -543,7 +558,7 @@ ipcMain.handle('read-file', async (event, filePath) => {
 });
 
 // Handle search
-ipcMain.handle('search', async (event, query) => {
+ipcMain.handle('search', async (event, query, granularityLevels = { paragraph: true }) => {
   try {
     if (indexedChunks.length === 0) {
       return { 
@@ -552,7 +567,34 @@ ipcMain.handle('search', async (event, query) => {
       };
     }
     
-    const results = await fileSystem.searchChunks(query, indexedChunks);
+    // Get chunks from database by granularity levels
+    let filteredChunks;
+    try {
+      filteredChunks = await fileSystem.getChunksByGranularity(granularityLevels);
+      console.log(`Retrieved ${filteredChunks.length} chunks from database matching granularity levels`);
+    } catch (error) {
+      console.error('Error getting chunks from database:', error);
+      
+      // Fallback to in-memory filtering if database query fails
+      filteredChunks = indexedChunks.filter(chunk => {
+        // If no granularity specified, default to paragraph
+        if (!chunk.granularity) {
+          return granularityLevels.paragraph;
+        }
+        
+        // Otherwise, check if the chunk's granularity is selected
+        return granularityLevels[chunk.granularity];
+      });
+    }
+    
+    if (filteredChunks.length === 0) {
+      return {
+        success: false,
+        error: 'No chunks match the selected granularity levels. Try selecting different levels.'
+      };
+    }
+    
+    const results = await fileSystem.searchChunks(query, filteredChunks);
     
     return { 
       success: true, 

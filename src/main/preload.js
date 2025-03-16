@@ -6,9 +6,10 @@ contextBridge.exposeInMainWorld(
   'electron',
   {
     selectDirectory: () => ipcRenderer.invoke('select-directory'),
-    scanDirectory: (directoryPath) => ipcRenderer.invoke('scan-directory', directoryPath),
+    scanDirectory: (directoryPath, fileExtensions, granularityLevels) => 
+      ipcRenderer.invoke('scan-directory', directoryPath, fileExtensions, granularityLevels),
     readFile: (filePath) => ipcRenderer.invoke('read-file', filePath),
-    search: (query) => ipcRenderer.invoke('search', query),
+    search: (query, granularityLevels) => ipcRenderer.invoke('search', query, granularityLevels),
     checkIndexedData: () => ipcRenderer.invoke('check-indexed-data'),
     onFolderSelected: (callback) => {
       ipcRenderer.on('folder-selected', (event, folderPath) => {
