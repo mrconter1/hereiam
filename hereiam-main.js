@@ -459,8 +459,8 @@ ipcMain.handle('scan-directory', async (event, directoryPath, fileExtensions = [
     // Scan directory for files
     const allFiles = await fileSystem.scanDirectory(directoryPath, fileExtensions);
     
-    // DEV LIMIT: Only process the first 25 files
-    const files = isDev ? allFiles.slice(0, 25) : allFiles;
+    // DEV LIMIT: Only process the first 250 files
+    const files = isDev ? allFiles.slice(0, 250) : allFiles;
     console.log(`Found ${allFiles.length} files, processing ${files.length} files (dev limit: ${isDev})`);
     
     // Clear existing indexed chunks

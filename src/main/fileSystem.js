@@ -145,7 +145,7 @@ async function extractTextChunks(filePath, chunkSize = 1000) {
   // For development, use larger chunks and limit the number of chunks per file
   const isDev = process.env.NODE_ENV === 'development';
   const devChunkSize = 2000; // Larger chunks in dev mode
-  const maxChunksPerFile = isDev ? 3 : Infinity; // Limit chunks per file in dev mode
+  const maxChunksPerFile = isDev ? 10 : Infinity; // Limit chunks per file in dev mode
   
   const actualChunkSize = isDev ? devChunkSize : chunkSize;
   
