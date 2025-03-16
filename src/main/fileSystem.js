@@ -11,7 +11,7 @@ const statAsync = promisify(fs.stat);
 // Check if Python is installed and install required packages if needed
 async function setupPythonEnvironment() {
   return new Promise((resolve, reject) => {
-    const pip = spawn('pip', ['install', 'sentence-transformers', 'numpy', 'scikit-learn', '--user']);
+    const pip = spawn('pip', ['install', 'sentence-transformers', 'numpy', 'scikit-learn', 'faiss-cpu', '--user']);
     
     pip.stdout.on('data', (data) => {
       console.log(`pip stdout: ${data}`);
@@ -211,6 +211,9 @@ with open('${tempFilePath.replace(/\\/g, '\\\\')}', 'r', encoding='utf-8') as f:
 # Generate embeddings
 embeddings = model.encode(texts)
 
+# Normalize embeddings for cosine similarity
+embeddings = embeddings / np.linalg.norm(embeddings, axis=1, keepdims=True)
+
 # Save embeddings to a file
 with open('${tempFilePath.replace(/\\/g, '\\\\')}.embeddings', 'w', encoding='utf-8') as f:
     json.dump(embeddings.tolist(), f)
@@ -260,7 +263,7 @@ with open('${tempFilePath.replace(/\\/g, '\\\\')}.embeddings', 'w', encoding='ut
 }
 
 /**
- * Searches for similar chunks using cosine similarity
+ * Searches for similar chunks using a persistent FAISS index
  * @param {string} query - The search query
  * @param {Array<{text: string, filePath: string, startPos: number, embedding: Array<number>}>} chunks - Chunks with embeddings
  * @param {string} modelName - Name of the sentence-transformer model to use
@@ -274,22 +277,27 @@ async function searchChunks(query, chunks, modelName = 'all-MiniLM-L6-v2', topK 
   
   console.log(`Using search model: ${embeddingModel} (dev mode: ${isDev})`);
   
+  // Path for the FAISS index
+  const indexPath = path.join(__dirname, 'faiss_index.bin');
+  
+  // Check if FAISS index exists, if not create it
+  if (!fs.existsSync(indexPath)) {
+    console.log('FAISS index not found, creating it...');
+    await createFaissIndex(chunks);
+  }
+  
   // Create a temporary file to store the query
   const tempFilePath = path.join(__dirname, 'temp_query.json');
   fs.writeFileSync(tempFilePath, JSON.stringify([query]));
   
-  // Create a temporary file to store the chunk embeddings
-  const chunksEmbeddingsPath = path.join(__dirname, 'temp_chunks_embeddings.json');
-  fs.writeFileSync(chunksEmbeddingsPath, JSON.stringify(chunks.map(c => c.embedding)));
-  
-  // Create a Python script to search for similar chunks
-  const scriptPath = path.join(__dirname, 'search_chunks.py');
+  // Create a Python script to search using the persistent FAISS index
+  const scriptPath = path.join(__dirname, 'search_faiss_index.py');
   const scriptContent = `
 import sys
 import json
 import numpy as np
+import faiss
 from sentence_transformers import SentenceTransformer
-from sklearn.metrics.pairwise import cosine_similarity
 
 # Load the model
 model = SentenceTransformer('${embeddingModel}')
@@ -301,19 +309,20 @@ with open('${tempFilePath.replace(/\\/g, '\\\\')}', 'r', encoding='utf-8') as f:
 # Generate query embedding
 query_embedding = model.encode([query])[0]
 
-# Load chunk embeddings
-with open('${chunksEmbeddingsPath.replace(/\\/g, '\\\\')}', 'r', encoding='utf-8') as f:
-    chunk_embeddings = json.load(f)
+# Normalize query embedding for cosine similarity
+query_embedding = query_embedding / np.linalg.norm(query_embedding)
 
-# Calculate cosine similarity
-similarities = cosine_similarity([query_embedding], chunk_embeddings)[0]
+# Load the FAISS index
+index = faiss.read_index('${indexPath.replace(/\\/g, '\\\\')}')
 
-# Get top-k results
-top_indices = np.argsort(similarities)[::-1][:${topK}]
-top_scores = similarities[top_indices]
+# Search the index
+k = min(${topK}, index.ntotal)  # Make sure k is not larger than the number of vectors
+distances, indices = index.search(np.array([query_embedding]).astype('float32'), k)
+
+# Format results
+results = [{"index": int(idx), "score": float(score)} for idx, score in zip(indices[0], distances[0])]
 
 # Save results to a file
-results = [{"index": int(idx), "score": float(score)} for idx, score in zip(top_indices, top_scores)]
 with open('${tempFilePath.replace(/\\/g, '\\\\')}.results', 'w', encoding='utf-8') as f:
     json.dump(results, f)
   `;
@@ -348,10 +357,84 @@ with open('${tempFilePath.replace(/\\/g, '\\\\')}.results', 'w', encoding='utf-8
           // Clean up temporary files
           fs.unlinkSync(tempFilePath);
           fs.unlinkSync(`${tempFilePath}.results`);
-          fs.unlinkSync(chunksEmbeddingsPath);
           fs.unlinkSync(scriptPath);
           
           resolve(searchResults);
+        } catch (error) {
+          reject(error);
+        }
+      } else {
+        reject(new Error(`Python process exited with code ${code}`));
+      }
+    });
+  });
+}
+
+/**
+ * Creates a persistent FAISS index from embeddings
+ * @param {Array<{text: string, filePath: string, startPos: number, embedding: Array<number>}>} chunks - Chunks with embeddings
+ * @returns {Promise<boolean>} - Success status
+ */
+async function createFaissIndex(chunks) {
+  // Create a temporary file to store the chunk embeddings
+  const chunksEmbeddingsPath = path.join(__dirname, 'temp_chunks_embeddings.json');
+  fs.writeFileSync(chunksEmbeddingsPath, JSON.stringify(chunks.map(c => c.embedding)));
+  
+  // Path for the FAISS index
+  const indexPath = path.join(__dirname, 'faiss_index.bin');
+  
+  // Create a Python script to build the FAISS index
+  const scriptPath = path.join(__dirname, 'create_faiss_index.py');
+  const scriptContent = `
+import sys
+import json
+import numpy as np
+import faiss
+import os
+
+# Load chunk embeddings
+with open('${chunksEmbeddingsPath.replace(/\\/g, '\\\\')}', 'r', encoding='utf-8') as f:
+    chunk_embeddings = json.load(f)
+
+# Convert to numpy array
+chunk_embeddings = np.array(chunk_embeddings).astype('float32')
+
+# Build FAISS index - using IndexFlatIP for inner product (cosine similarity with normalized vectors)
+dimension = chunk_embeddings.shape[1]  # Get the dimension of the embeddings
+index = faiss.IndexFlatIP(dimension)   # Inner product is equivalent to cosine similarity when vectors are normalized
+index.add(chunk_embeddings)            # Add vectors to the index
+
+# Save the index to disk
+faiss.write_index(index, '${indexPath.replace(/\\/g, '\\\\')}')
+
+# Clean up
+os.remove('${chunksEmbeddingsPath.replace(/\\/g, '\\\\')}')
+
+print(f"FAISS index created with {len(chunk_embeddings)} vectors of dimension {dimension}")
+  `;
+  
+  fs.writeFileSync(scriptPath, scriptContent);
+  
+  // Run the Python script
+  return new Promise((resolve, reject) => {
+    const python = spawn('python', [scriptPath]);
+    
+    python.stdout.on('data', (data) => {
+      console.log(`Python stdout: ${data}`);
+    });
+    
+    python.stderr.on('data', (data) => {
+      console.error(`Python stderr: ${data}`);
+    });
+    
+    python.on('close', (code) => {
+      if (code === 0) {
+        try {
+          // Clean up temporary files
+          fs.unlinkSync(scriptPath);
+          
+          console.log('FAISS index created successfully');
+          resolve(true);
         } catch (error) {
           reject(error);
         }
@@ -368,5 +451,6 @@ module.exports = {
   readTextFile,
   extractTextChunks,
   generateEmbeddings,
-  searchChunks
+  searchChunks,
+  createFaissIndex
 }; 

@@ -511,6 +511,14 @@ ipcMain.handle('scan-directory', async (event, directoryPath, fileExtensions = [
     // Save indexed chunks to disk
     saveIndexedChunks();
     
+    // Create FAISS index for faster searching
+    try {
+      await fileSystem.createFaissIndex(indexedChunks);
+      console.log('FAISS index created for faster searching');
+    } catch (error) {
+      console.error('Error creating FAISS index:', error);
+    }
+    
     return { 
       success: true, 
       files,
